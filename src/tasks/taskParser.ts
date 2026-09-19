@@ -21,8 +21,10 @@ export class TaskParser {
     private readonly DATE_PATTERN = /📅\s*(\d{4}-\d{2}-\d{2})/;
     private readonly TIME_PATTERN = /⏰\s*(\d{1,2}:\d{2})/;
     private readonly END_TIME_PATTERN = /➡️\s*(\d{1,2}:\d{2})/;
+    private readonly DURATION_PATTERN = /⏱\s*(\d+)([mh])/;
     private readonly REMINDER_PATTERN = /🔔\s*(\d+)([mhd])/;
     private readonly TASK_PATTERN = /^- \[[ xX]\] (.+)/;
+    private readonly EVENT_PATTERN = /^- 📆\s+(.+)/;
     private readonly COMPLETION_PATTERN = /✅\s*(\d{4}-\d{2}-\d{2})/;
     private readonly ID_PATTERN = /<!-- task-id: ([a-z0-9]+) -->/;
 
@@ -198,7 +200,8 @@ export class TaskParser {
     }
 
     public isTaskLine(line: string): boolean {
-        return this.TASK_PATTERN.test(line.trim());
+        const normalized = line.trim();
+        return this.TASK_PATTERN.test(normalized) || this.EVENT_PATTERN.test(normalized);
     }
 
     public async parseTask(line: string, filePath?: string): Promise<Task | null> {
@@ -212,6 +215,9 @@ export class TaskParser {
                 }
                 return null;
             }
+
+            const normalizedHeader = line.split('\n')[0].trim();
+            const kind: 'task' | 'event' = this.EVENT_PATTERN.test(normalizedHeader) ? 'event' : 'task';
 
             const taskData = this.parseTaskData(line);
             // Silently skip invalid tasks without logging
@@ -248,8 +254,10 @@ export class TaskParser {
                 date: taskData.date || '',
                 time: taskData.time,
                 endTime: taskData.endTime,
+                durationMinutes: taskData.durationMinutes,
                 reminder: taskData.reminder,
-                completed: this.isTaskCompleted(line),
+                kind,
+                completed: kind === 'task' ? this.isTaskCompleted(line) : false,
                 createdAt: metadata?.createdAt || Date.now(),
                 completedDate: this.getCompletionDate(line),
                 filePath
@@ -469,8 +477,9 @@ export class TaskParser {
         const lines = line.split('\n');
         let header = lines[0];
 
-        // Remove checkbox with proper spacing handling
+        // Remove task checkbox or informational-event prefix.
         header = header.replace(/^- \[[xX ]\]\s*/, '');
+        header = header.replace(/^- 📆\s*/, '');
 
         // Process date, time, and other markers with consistent spacing
         // This helps prevent data corruption and ensures consistent format
@@ -478,6 +487,7 @@ export class TaskParser {
         header = header.replace(this.DATE_PATTERN, '').trim();
         header = header.replace(this.TIME_PATTERN, '').trim();
         header = header.replace(this.END_TIME_PATTERN, '').trim();
+        header = header.replace(this.DURATION_PATTERN, '').trim();
         header = header.replace(this.REMINDER_PATTERN, '').trim();
         header = header.replace(/✅ \d{4}-\d{2}-\d{2}/, '').trim();
 
@@ -517,21 +527,18 @@ export class TaskParser {
         return header;
     }
 
-    private parseTaskData(line: string): { date?: string, time?: string, endTime?: string, reminder?: number } {
-        // Only log if verbose logging is enabled
+    private parseTaskData(line: string): ParsedTaskData {
         if (this.plugin.settings.verboseLogging) {
             LogUtils.debug(`Parsing task data from line: ${line}`);
         }
 
-        // Parse each component independently for more flexibility,
-        // supporting any order of components in the task line
         const dateMatch = line.match(this.DATE_PATTERN);
         const timeMatch = line.match(this.TIME_PATTERN);
         const endTimeMatch = line.match(this.END_TIME_PATTERN);
+        const durationMatch = line.match(this.DURATION_PATTERN);
         const reminderMatch = line.match(this.REMINDER_PATTERN);
 
-        // Parse reminder if present
-        let reminder: number | undefined = undefined;
+        let reminder: number | undefined;
         if (reminderMatch) {
             const [_, value, unit] = reminderMatch;
             const numValue = parseInt(value);
@@ -542,14 +549,21 @@ export class TaskParser {
             }
         }
 
-        const result = {
+        let durationMinutes: number | undefined;
+        if (durationMatch) {
+            const [_, value, unit] = durationMatch;
+            const numValue = parseInt(value);
+            durationMinutes = unit === 'h' ? numValue * 60 : numValue;
+        }
+
+        const result: ParsedTaskData = {
             date: dateMatch?.[1],
             time: timeMatch?.[1]?.padStart(5, '0'),
             endTime: endTimeMatch?.[1]?.padStart(5, '0'),
+            durationMinutes,
             reminder
         };
 
-        // Only log if verbose logging is enabled
         if (this.plugin.settings.verboseLogging) {
             LogUtils.debug('Parsed task data:', result);
         }
