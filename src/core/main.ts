@@ -54,10 +54,6 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // Initialize auth manager and await token loading
             this.authManager = new GoogleAuthManager(this);
 
-            // Make sure any previous protocol handlers are cleaned up first
-            // Don't await - let cleanup happen in background to avoid blocking startup
-            this.authManager.cleanup();
-
             // Register protocol handler for mobile OAuth
             this.registerObsidianProtocolHandler('auth/gcalsync', async (params) => {
                 if (this.authManager) {
