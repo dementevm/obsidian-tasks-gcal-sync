@@ -185,6 +185,10 @@ export class TokenController {
         }
     }
 
+    private isSyncItemLine(line: string): boolean {
+        return /^\s*-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
+    }
+
     private checkForNewTasks(editor: Editor) {
         // @ts-ignore - cm exists on editor but is not typed
         const view = editor.cm as EditorView
@@ -193,7 +197,7 @@ export class TokenController {
         const doc = view.state.doc
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
-            if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(this.ID_PATTERN)) {
+            if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
                 LogUtils.debug(`Found new task at line ${i}: ${line.text}`)
                 this.generateTaskId(view, line.from)
             }
@@ -392,7 +396,7 @@ export class TokenController {
 
                     for (let pos = startLine.from; pos <= endLine.to;) {
                         const line = doc.lineAt(pos);
-                        if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(idPattern)) {
+                        if (controller.isSyncItemLine(line.text) && !line.text.match(idPattern)) {
                             LogUtils.debug(`Real-time task detection: Found new task at line ${line.number}`);
                             controller.generateTaskId(update.view, line.from);
                         }
@@ -748,7 +752,6 @@ export class TokenController {
             taskIdField,
             atomicRanges,
             preventDeletion,
-            reminderConverter,
             taskCreationPlugin,
             taskCompletionPlugin
         ];
@@ -779,12 +782,13 @@ export class TokenController {
                 return '';
             }
 
-            // Check if this is a task line
-            const taskMatch = line.text.match(/^\s*- \[[ x]\] (.+)/)
-            if (!taskMatch) {
-                LogUtils.debug('Not a task line');
+            // IDs are shared by checkbox tasks and 📆 informational events.
+            if (!this.isSyncItemLine(line.text)) {
+                LogUtils.debug('Not a sync item line');
                 return '';
             }
+
+            const kind: 'task' | 'event' = /^\s*-\s+📆\s+/.test(line.text) ? 'event' : 'task';
 
             // Create the task ID
             const taskId = `<!-- task-id: ${id} -->`;
@@ -812,9 +816,13 @@ export class TokenController {
                 lastModified: now,
                 lastSynced: now,
                 eventId: '', // Will be filled when synced with Google Calendar
-                title: line.text.replace(/^\s*- \[[ xX]\] /, ''),
+                filePath: file.path,
+                kind,
+                title: line.text
+                    .replace(/^\s*- \[[ xX]\]\s*/, '')
+                    .replace(/^\s*-\s+📆\s*/, ''),
                 date: new Date().toISOString().split('T')[0],
-                completed: line.text.indexOf('- [x]') >= 0 || line.text.indexOf('- [X]') >= 0,
+                completed: kind === 'task' && (line.text.indexOf('- [x]') >= 0 || line.text.indexOf('- [X]') >= 0),
             };
             this.plugin.saveSettings();
 
@@ -852,7 +860,7 @@ export class TokenController {
                     const line = item.view.state.doc.lineAt(item.pos);
 
                     // Only generate ID if line is a task and doesn't already have an ID
-                    if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(this.ID_PATTERN)) {
+                    if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
                         const id = this._generateTaskId(item.view, item.pos);
                         if (id) {
                             LogUtils.debug(`Added ID to new task: ${id}`);
