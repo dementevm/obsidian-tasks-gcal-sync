@@ -17,8 +17,6 @@ jobs:
           node-version: '20.x'
           cache: npm
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
-      - name: Show lockfile changes
-        run: git diff -- package-lock.json || true
+        run: npm ci --no-audit --no-fund
       - name: Typecheck and build
         run: npm run build
