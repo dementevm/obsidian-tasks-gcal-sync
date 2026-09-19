@@ -260,8 +260,10 @@ export class GoogleAuthManager {
         if (token) {
             try {
                 await requestUrl({
-                    url: `${GOOGLE_REVOKE_ENDPOINT}?token=${encodeURIComponent(token)}`,
-                    method: 'POST'
+                    url: GOOGLE_REVOKE_ENDPOINT,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ token }).toString()
                 });
             } catch (error) {
                 LogUtils.warn('Google token revocation request failed:', error);
