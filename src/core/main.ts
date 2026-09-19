@@ -5,7 +5,6 @@ import { CalendarSync } from '../calendar/calendarSync';
 import { RepairManager } from '../repair/repairManager';
 import { GoogleCalendarSettingsTab, DEFAULT_SETTINGS } from './settings';
 import type { GoogleCalendarSettings, Task } from './types';
-import { loadGoogleCredentials } from '../config/config';
 import { TIMING } from '../config/constants';
 import { useStore, type TaskStore } from './store';
 import debounce from 'just-debounce-it';
@@ -37,15 +36,6 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
             // Load settings first
             await this.loadSettings();
-
-            // Only set default clientId if user hasn't provided custom credentials
-            if (!this.settings.clientId || !this.settings.clientSecret) {
-                const credentials = loadGoogleCredentials();
-                // Only set clientId if not already set by user
-                if (!this.settings.clientId) {
-                    this.settings.clientId = credentials.clientId;
-                }
-            }
 
             // Always disable welcome modal
             // Note: saveSettings() removed here - settings will be saved later when needed
