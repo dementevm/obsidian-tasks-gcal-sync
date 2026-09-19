@@ -74,7 +74,7 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
     ): EditorSuggestTriggerInfo | null {
         const line = editor.getLine(cursor.line);
         const beforeCursor = line.slice(0, cursor.ch);
-        const match = beforeCursor.match(/@([a-z]*)$/i);
+        const match = beforeCursor.match(/(?:^|\s)@([a-z]*)$/i);
 
         if (!match) {
             return null;
