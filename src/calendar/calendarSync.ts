@@ -253,7 +253,9 @@ export class CalendarSync {
                     date: task.date,
                     time: task.time,
                     endTime: task.endTime,
+                    durationMinutes: task.durationMinutes,
                     reminder: task.reminder,
+                    kind: task.kind || 'task',
                     completed: task.completed,
                     lastModified: Date.now(),
                     lastSynced: Date.now()
@@ -891,15 +893,15 @@ export class CalendarSync {
     }
 
     private createEventFromTask(task: Task): GoogleCalendarEventInput {
-        // Validate date/time
-        if (!this.validateDateTime(task.date, task.time)) {
-            throw new Error('Invalid date/time format');
-        }
-
         const isInformationalEvent = task.kind === 'event';
         const effectiveTime = task.time || (isInformationalEvent
             ? (this.plugin.settings.defaultMorningEventTime || '09:00')
             : undefined);
+
+        // Validate the effective time as informational events may inherit 09:00.
+        if (!this.validateDateTime(task.date, effectiveTime)) {
+            throw new Error('Invalid date/time format');
+        }
         const startTimezone = this.getTimezoneOffset(task.date, effectiveTime);
         const version = Date.now().toString();
 
@@ -962,6 +964,7 @@ export class CalendarSync {
                 private: {
                     obsidianTaskId: task.id,
                     isObsidianTask: 'true',
+                    obsidianItemKind: task.kind || 'task',
                     version
                 }
             },
