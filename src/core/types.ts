@@ -60,7 +60,14 @@ export interface TaskMetadata {
 
 export interface GoogleCalendarSettings {
     clientId: string;
+    /**
+     * Legacy plaintext client secret. Kept only for one-time migration to SecretStorage.
+     */
     clientSecret?: string;
+    /** SecretStorage entry name containing the Google OAuth client secret. */
+    clientSecretName: string;
+    /** HTTPS OAuth redirect bridge URL configured in Google Cloud. */
+    oauthRedirectUri: string;
     oauth2Tokens?: OAuth2Tokens;
     encryptedOAuth2Tokens?: string; // Encrypted tokens (replaces oauth2Tokens when encrypted)
     tokensEncrypted?: boolean; // Flag indicating tokens are stored encrypted
