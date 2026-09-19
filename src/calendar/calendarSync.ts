@@ -933,7 +933,7 @@ export class CalendarSync {
             endDate = task.endTime <= task.time ? this.addDays(task.date, 1) : task.date;
             endTime = task.endTime;
         } else {
-            const duration = this.plugin.settings.defaultEventDurationMinutes ?? 30;
+            const duration = this.plugin.settings.defaultEventDurationMinutes ?? 5;
             const calculatedEnd = this.addMinutes(task.date, task.time, duration);
             endDate = calculatedEnd.date;
             endTime = calculatedEnd.time;
