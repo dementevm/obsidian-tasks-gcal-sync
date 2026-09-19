@@ -12,7 +12,7 @@ This repository started from [Sasoon/obsidian-gcal-sync](https://github.com/Saso
 - Google refresh token stored in Obsidian SecretStorage.
 - PKCE state/verifier stay device-local and are not synced through plugin settings.
 - Configurable target calendar instead of hard-coded `primary`.
-- A small auditable static OAuth redirect bridge is included in `bridge/index.html`.
+- OAuth bridge is isolated in the public `dementevm/obsidian-tasks-gcal-sync-bridge` repository.
 - Separate plugin ID: `obsidian-tasks-gcal-sync`.
 
 The plugin requests only:
@@ -27,7 +27,7 @@ https://www.googleapis.com/auth/calendar.events
 - Obsidian Tasks
 - Google Calendar API enabled in your Google Cloud project
 - Google OAuth Web application client
-- HTTPS hosting for the static OAuth bridge
+- OAuth bridge at `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
 
 ## Task syntax
 
