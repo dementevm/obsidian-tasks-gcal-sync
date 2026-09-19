@@ -595,7 +595,21 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     }
 
     async loadSettings() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const storedSettings = await this.loadData() || {};
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings);
+
+        // v2 changes the personal-workflow defaults introduced during desktop
+        // smoke testing: five-minute timed items and 09:00 morning reminders.
+        if ((storedSettings.settingsSchemaVersion ?? 0) < 2) {
+            if (storedSettings.defaultEventDurationMinutes === undefined ||
+                storedSettings.defaultEventDurationMinutes === 30) {
+                this.settings.defaultEventDurationMinutes = 5;
+            }
+            this.settings.defaultMorningEventTime =
+                storedSettings.defaultMorningEventTime || '09:00';
+            this.settings.settingsSchemaVersion = 2;
+            await this.saveSettings();
+        }
 
         // One-time migration from the upstream plugin, where the OAuth client
         // secret could be stored directly in data.json.
