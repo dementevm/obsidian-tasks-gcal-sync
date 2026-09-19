@@ -41,12 +41,24 @@ content, or calendar data.
 
 1. Create or select a Google Cloud project.
 2. Enable **Google Calendar API**.
-3. Configure the OAuth consent screen.
-4. For personal use, keep the app in Testing and add your Google account as a test user.
-5. Create an OAuth client:
+3. Open **Google Auth Platform** and configure:
+   - **Branding**: app name, support email and developer contact email.
+   - **Audience**: **External** for a normal personal Google account.
+   - **Data Access**: add only
+     `https://www.googleapis.com/auth/calendar.events.owned`.
+4. During the first smoke test you may keep the app in **Testing** and add your
+   Google account as a test user.
+5. After the smoke test, switch the app to **In production**. In Testing,
+   authorizations that request Calendar access expire after 7 days, including
+   offline refresh tokens. For a personal-use app with fewer than 100 users,
+   Google does not require OAuth verification, although an unverified-app
+   warning can still be shown.
+6. Under **Clients**, create an OAuth client:
    - Application type: **Web application**
-   - Authorized redirect URI: `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
-6. Copy the Client ID and Client Secret.
+   - Authorized redirect URI:
+     `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
+   - The scheme, path and trailing slash must match exactly.
+7. Copy the Client ID and Client Secret.
 
 The plugin currently requests only:
 
