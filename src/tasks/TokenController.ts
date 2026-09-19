@@ -221,7 +221,7 @@ export class TokenController {
             const reminderMatch = line.text.match(/🔔\s*(\d+)([mhd])/)
 
             // Handle task IDs that might be on wrong lines after line breaks
-            if (taskIdMatches.length > 0 && !line.text.match(/^.*?- \[[ x]\].*/)) {
+            if (taskIdMatches.length > 0 && !this.isSyncItemLine(line.text)) {
                 // Found a task ID on a non-task line - move it to the previous task line
                 const taskId = taskIdMatches[0][0]
                 LogUtils.debug(`Found orphaned task ID on line ${i}: ${taskId}`)
@@ -229,7 +229,7 @@ export class TokenController {
                 // Look for the previous task line
                 if (i > 1) {
                     const prevLine = doc.line(i - 1)
-                    if (prevLine.text.match(/^.*?- \[[ x]\].*/) && !prevLine.text.match(this.ID_PATTERN)) {
+                    if (this.isSyncItemLine(prevLine.text) && !prevLine.text.match(this.ID_PATTERN)) {
                         // Previous line is a task without an ID - move the ID there
                         changes.push({
                             from: prevLine.from,
@@ -258,7 +258,7 @@ export class TokenController {
                 }
             }
 
-            if (line.text.match(/^.*?- \[[ x]\].*/)) {
+            if (this.isSyncItemLine(line.text)) {
                 let needsUpdate = false
                 let newLine = line.text
 
@@ -502,8 +502,8 @@ export class TokenController {
                     const oldDoc = tr.startState.doc.toString();
 
                     // Get all task lines and their IDs from both states
-                    const oldMatches = Array.from(oldDoc.matchAll(/^.*?- \[[ x]\].*?(<!-- task-id: [a-z0-9]+ -->)/gm));
-                    const newMatches = Array.from(newDoc.matchAll(/^.*?- \[[ x]\].*?(<!-- task-id: [a-z0-9]+ -->)/gm));
+                    const oldMatches = Array.from(oldDoc.matchAll(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/gm));
+                    const newMatches = Array.from(newDoc.matchAll(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/gm));
 
                     // If we have fewer task IDs but the same number of tasks, prevent the change
                     // This catches standalone ID deletions while allowing task operations
@@ -588,7 +588,7 @@ export class TokenController {
 
                     // Check if the line contains a task
                     const line = content.slice(lineStart, lineEnd);
-                    const isTaskLine = line.match(/^.*?- \[[ xX]\]/);
+                    const isTaskLine = /^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
 
                     // Make the ID atomic only if it's in a task line and not being deleted as part of the whole line
                     if (isTaskLine) {
@@ -616,7 +616,7 @@ export class TokenController {
 
             tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
                 const line = tr.startState.doc.lineAt(fromA);
-                const taskMatch = line.text.match(/^.*?- \[[ xX]\].*?(<!-- task-id: [a-z0-9]+ -->)/);
+                const taskMatch = line.text.match(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/);
                 const insertedText = inserted.toString();
 
                 // Allow complete line deletion (when a line is fully deleted and replaced with nothing)
@@ -676,7 +676,7 @@ export class TokenController {
                         // Entire line is being modified
                         (line.text.trim() === tr.startState.sliceDoc(fromA, toA).trim()) ||
                         // New task is being pasted
-                        (insertedText.match(/^- \[[ xX]\]/));
+                        (/^-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(insertedText));
 
                     // Block if trying to modify just the ID
                     if (!isWholeTaskOperation &&
@@ -689,8 +689,8 @@ export class TokenController {
                 // Check for standalone ID deletion (but not if deleting the entire line)
                 const deletedText = tr.startState.sliceDoc(fromA, toA);
                 if (deletedText.match(this.ID_PATTERN) &&
-                    !deletedText.match(/^.*?- \[[ xX]\]/) &&
-                    !insertedText.match(/^.*?- \[[ xX]\]/) &&
+                    !/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(deletedText) &&
+                    !/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(insertedText) &&
                     !isLineDeletion) {
                     shouldBlock = true;
                     return;
