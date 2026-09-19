@@ -251,7 +251,8 @@ export class TaskParser {
                 reminder: taskData.reminder,
                 completed: this.isTaskCompleted(line),
                 createdAt: metadata?.createdAt || Date.now(),
-                completedDate: this.getCompletionDate(line)
+                completedDate: this.getCompletionDate(line),
+                filePath
             };
 
             // parseTask is a pure parsing function — no side effects.
