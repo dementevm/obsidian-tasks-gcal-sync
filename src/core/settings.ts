@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, SecretComponent, Setting } from 'obsidian';
 import type GoogleCalendarSync from './main';
 import { GoogleCalendarSettings } from './types';
 import { useStore } from './store';
@@ -6,7 +6,8 @@ import { Notice } from 'obsidian';
 
 export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     clientId: '',
-    clientSecret: '',
+    clientSecretName: '',
+    oauthRedirectUri: '',
     oauth2Tokens: undefined,
     syncEnabled: true,
     calendarId: 'primary',
@@ -129,33 +130,21 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     }
                 }));
 
-        // Custom OAuth Credentials Section
-        containerEl.createEl('h3', { text: 'Custom OAuth Credentials (Advanced)' });
+        // OAuth Settings Section
+        containerEl.createEl('h3', { text: 'Google OAuth (Privacy-first)' });
 
         const oauthDesc = containerEl.createEl('div', { cls: 'setting-item-description' });
         oauthDesc.style.marginBottom = '1em';
-
-        oauthDesc.createEl('p', { text: 'If you\'re seeing "This app is blocked" errors, you can use your own Google Cloud OAuth credentials:' });
-        const ol = oauthDesc.createEl('ol');
-        const step1 = ol.createEl('li');
-        step1.appendText('Go to ');
-        step1.createEl('a', { text: 'Google Cloud Console', href: 'https://console.cloud.google.com/' });
-        ol.createEl('li', { text: 'Create a new project (or select existing)' });
-        ol.createEl('li', { text: 'Enable the Google Calendar API' });
-        ol.createEl('li', { text: 'Go to "Credentials" \u2192 "Create Credentials" \u2192 "OAuth client ID"' });
-        ol.createEl('li', { text: 'Choose "Desktop app" as the application type' });
-        ol.createEl('li', { text: 'Copy the Client ID and Client Secret below' });
-        const step7 = ol.createEl('li');
-        step7.appendText('Add ');
-        step7.createEl('code', { text: 'http://127.0.0.1:8085/callback' });
-        step7.appendText(' to Authorized redirect URIs');
-        const noteP = oauthDesc.createEl('p');
-        noteP.createEl('strong', { text: 'Note:' });
-        noteP.appendText(' After changing credentials, disconnect and reconnect your Google account.');
+        oauthDesc.createEl('p', {
+            text: 'Use your own Google Cloud Web application OAuth client. Authentication goes directly between Obsidian and Google; the redirect bridge only returns the one-time authorization code to Obsidian.'
+        });
+        oauthDesc.createEl('p', {
+            text: 'The client secret and refresh token are stored in Obsidian SecretStorage and are not written to this plugin\'s data.json.'
+        });
 
         new Setting(containerEl)
-            .setName('Custom Client ID')
-            .setDesc('Your Google OAuth Client ID (leave empty to use default)')
+            .setName('OAuth Client ID')
+            .setDesc('Client ID from your Google Cloud Web application OAuth client.')
             .addText(text => text
                 .setPlaceholder('xxxxxx.apps.googleusercontent.com')
                 .setValue(this.plugin.settings.clientId || '')
@@ -165,16 +154,30 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Custom Client Secret')
-            .setDesc('Your Google OAuth Client Secret (leave empty to use default)')
-            .addText(text => {
-                text.setPlaceholder('GOCSPX-xxxxxx')
-                    .setValue(this.plugin.settings.clientSecret || '')
-                    .onChange(async (value) => {
-                        this.plugin.settings.clientSecret = value.trim();
-                        await this.plugin.saveSettings();
-                    });
-                text.inputEl.type = 'password';
-            });
+            .setName('OAuth Client Secret')
+            .setDesc('Select or create a SecretStorage entry containing the client secret. The secret value stays local to this device.')
+            .addComponent(el => new SecretComponent(this.app, el)
+                .setValue(this.plugin.settings.clientSecretName || '')
+                .onChange(async (value) => {
+                    this.plugin.settings.clientSecretName = value ?? '';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('OAuth Redirect Bridge URL')
+            .setDesc('HTTPS URL of the static OAuth bridge. It must exactly match an Authorized redirect URI in your Google Cloud OAuth client.')
+            .addText(text => text
+                .setPlaceholder('https://example.com/obsidian-gcal/')
+                .setValue(this.plugin.settings.oauthRedirectUri || '')
+                .onChange(async (value) => {
+                    this.plugin.settings.oauthRedirectUri = value.trim();
+                    await this.plugin.saveSettings();
+                }));
+
+        const authNote = containerEl.createEl('div', { cls: 'setting-item-description' });
+        authNote.style.marginTop = '0.75em';
+        authNote.createEl('p', {
+            text: 'Because SecretStorage is device-local, add/select the client-secret entry once on each device. Each device keeps its own Google refresh token.'
+        });
     }
 }
