@@ -20,6 +20,7 @@ interface GoogleCalendarEventInput {
         private: {
             obsidianTaskId: string;
             isObsidianTask: 'true';
+            obsidianItemKind?: 'task' | 'event';
             version?: string;
         };
     };
