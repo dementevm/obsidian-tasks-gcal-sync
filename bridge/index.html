@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Obsidian Tasks GCal Sync</title>
+</head>
+<body>
+    <main>
+        <h1>Returning to Obsidian…</h1>
+        <p id="status">Processing Google authorization response.</p>
+        <p><a id="open-obsidian" href="#" hidden>Open Obsidian</a></p>
+    </main>
+    <script>
+        (() => {
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get('code');
+            const state = params.get('state');
+            const error = params.get('error');
+            const status = document.getElementById('status');
+            const link = document.getElementById('open-obsidian');
+
+            const target = new URL('obsidian://auth/gcalsync');
+            if (code) target.searchParams.set('code', code);
+            if (state) target.searchParams.set('state', state);
+            if (error) target.searchParams.set('error', error);
+
+            if (!code && !error) {
+                status.textContent = 'Missing OAuth response. Start Connect to Google from Obsidian.';
+                return;
+            }
+
+            link.href = target.toString();
+            link.hidden = false;
+            status.textContent = 'Authorization received. Opening Obsidian…';
+            window.location.replace(target.toString());
+        })();
+    </script>
+</body>
+</html>
