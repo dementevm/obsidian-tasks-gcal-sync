@@ -18,7 +18,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
         date: boolean;
         time: boolean;
         endTime: boolean;
+        durationMinutes: boolean;
         reminder: boolean;
+        kind: boolean;
         completed: boolean;
         filePath: boolean;
     };
@@ -46,7 +48,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
                 date: false,
                 time: false,
                 endTime: false,
+                durationMinutes: false,
                 reminder: false,
+                kind: false,
                 completed: true,
                 filePath: false
             }
@@ -63,7 +67,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
         date: task.date !== metadata.date,
         time: task.time !== metadata.time,
         endTime: task.endTime !== metadata.endTime,
+        durationMinutes: task.durationMinutes !== metadata.durationMinutes,
         reminder: task.reminder !== metadata.reminder && (task.reminder !== undefined || metadata.reminder !== undefined),
+        kind: (task.kind || 'task') !== (metadata.kind || 'task'),
         completed: task.completed !== metadata.completed,
         filePath: !!task.filePath && metadata.filePath !== task.filePath // Track file moves
     };
