@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     calendarId: 'primary',
     defaultReminder: 30,
     defaultEventDurationMinutes: 5,
+    defaultMorningEventTime: '09:00',
     includeFolders: [],  // Empty by default to scan all folders
     taskMetadata: {},
     taskIds: {},
@@ -104,6 +105,20 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     const duration = parseInt(value);
                     if (!isNaN(duration) && duration > 0 && duration <= 1440) {
                         this.plugin.settings.defaultEventDurationMinutes = duration;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('Morning Event Time')
+            .setDesc('Default time for 📆 informational events that have a date but no explicit ⏰ time.')
+            .addText(text => text
+                .setPlaceholder('09:00')
+                .setValue(this.plugin.settings.defaultMorningEventTime || '09:00')
+                .onChange(async (value) => {
+                    const normalized = value.trim();
+                    if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
+                        this.plugin.settings.defaultMorningEventTime = normalized;
                         await this.plugin.saveSettings();
                     }
                 }));
