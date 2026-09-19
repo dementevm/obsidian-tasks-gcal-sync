@@ -7,7 +7,7 @@ import { Notice } from 'obsidian';
 export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     clientId: '',
     clientSecretName: '',
-    oauthRedirectUri: '',
+    oauthRedirectUri: 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/',
     oauth2Tokens: undefined,
     syncEnabled: true,
     calendarId: 'primary',
@@ -182,7 +182,7 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
             .setName('OAuth Redirect Bridge URL')
             .setDesc('HTTPS URL of the static OAuth bridge. It must exactly match an Authorized redirect URI in your Google Cloud OAuth client.')
             .addText(text => text
-                .setPlaceholder('https://example.com/obsidian-gcal/')
+                .setPlaceholder('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/')
                 .setValue(this.plugin.settings.oauthRedirectUri || '')
                 .onChange(async (value) => {
                     this.plugin.settings.oauthRedirectUri = value.trim();
