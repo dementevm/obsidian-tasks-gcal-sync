@@ -74,6 +74,7 @@ export interface GoogleCalendarSettings {
     syncEnabled: boolean;
     calendarId: string;
     defaultReminder: number;
+    defaultEventDurationMinutes: number;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
     taskIds: Record<string, string>;
