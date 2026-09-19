@@ -51,7 +51,7 @@ content, or calendar data.
 The plugin currently requests only:
 
 ```text
-https://www.googleapis.com/auth/calendar.events
+https://www.googleapis.com/auth/calendar.events.owned
 ```
 
 ## Redirect bridge
