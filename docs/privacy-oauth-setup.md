@@ -82,7 +82,11 @@ Use this URL exactly in Google Cloud, including the trailing slash.
 
 ## Obsidian configuration
 
-Open **Settings → Google Calendar Sync**.
+Open **Settings → Tasks Google Calendar Sync**.
+
+For the first smoke test, leave **Auto-sync disabled** and restrict
+**Folders to Sync** to a dedicated empty test folder so connecting to Google
+cannot publish existing vault tasks.
 
 1. Set **Calendar ID**.
    - Prefer the ID of a dedicated `Obsidian Tasks` calendar.
