@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     hasCompletedOnboarding: true,  // Set to true to prevent welcome modal on startup
     mobileSyncLimit: 100,  // Default to 100 files on mobile
     mobileOptimizations: true,  // Enable mobile optimizations by default
+    settingsSchemaVersion: 2,
 };
 
 export class GoogleCalendarSettingsTab extends PluginSettingTab {
