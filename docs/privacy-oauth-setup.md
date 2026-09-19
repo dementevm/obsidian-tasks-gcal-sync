@@ -34,7 +34,7 @@ content, or calendar data.
 - Obsidian 1.11.4 or newer.
 - Google Calendar API enabled in a Google Cloud project.
 - A Google OAuth client of type **Web application**.
-- An HTTPS URL hosting `bridge/index.html`.
+- OAuth bridge: `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`.
 - A dedicated Google calendar is recommended, for example `Obsidian Tasks`.
 
 ## Google Cloud
@@ -45,7 +45,7 @@ content, or calendar data.
 4. For personal use, keep the app in Testing and add your Google account as a test user.
 5. Create an OAuth client:
    - Application type: **Web application**
-   - Authorized redirect URI: the exact HTTPS URL where `bridge/index.html` is hosted.
+   - Authorized redirect URI: `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
 6. Copy the Client ID and Client Secret.
 
 The plugin currently requests only:
@@ -56,13 +56,17 @@ https://www.googleapis.com/auth/calendar.events
 
 ## Redirect bridge
 
-Publish `bridge/index.html` on any HTTPS static host you control.
+The canonical bridge for this private plugin is:
 
-The URL must exactly match the redirect URI configured in Google Cloud,
-including path and trailing slash.
+```text
+https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/
+```
 
-The bridge performs no server-side processing. You can inspect the complete
-implementation in `bridge/index.html`.
+Its source is intentionally public in `dementevm/obsidian-tasks-gcal-sync-bridge`.
+It performs no server-side processing, stores nothing, and contains no client
+secret or refresh token.
+
+Use this URL exactly in Google Cloud, including the trailing slash.
 
 ## Obsidian configuration
 
@@ -74,7 +78,7 @@ Open **Settings → Google Calendar Sync**.
 2. Set **OAuth Client ID**.
 3. Under **OAuth Client Secret**, create/select an Obsidian SecretStorage entry
    containing the Google OAuth client secret.
-4. Set **OAuth Redirect Bridge URL** to the exact HTTPS redirect URL.
+4. Keep **OAuth Redirect Bridge URL** as `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`.
 5. Connect to Google.
 
 ## Device-local secrets
