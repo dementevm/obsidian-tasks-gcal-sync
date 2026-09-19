@@ -20,3 +20,15 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Typecheck and build
         run: npm run build
+
+      - name: Package test build
+        run: |
+          mkdir -p dist/obsidian-tasks-gcal-sync
+          cp main.js manifest.json styles.css dist/obsidian-tasks-gcal-sync/
+
+      - name: Upload test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: obsidian-tasks-gcal-sync-${{ github.sha }}
+          path: dist/obsidian-tasks-gcal-sync
+          retention-days: 7
