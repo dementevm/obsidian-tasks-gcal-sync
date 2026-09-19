@@ -6,7 +6,7 @@ import { LogUtils } from '../utils/logUtils';
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
-const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 
 const REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
 const LOCAL_STATE_KEY = 'obsidian-tasks-gcal-sync-oauth-state';
