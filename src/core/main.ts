@@ -10,6 +10,7 @@ import { useStore, type TaskStore } from './store';
 import debounce from 'just-debounce-it';
 import { MetadataManager } from '../metadata/metadataManager';
 import { TokenController } from '../tasks/TokenController';
+import { CalendarTokenSuggest } from '../tasks/CalendarTokenSuggest';
 import { LogUtils } from '../utils/logUtils';
 import { hasTaskChanged } from '../utils/taskUtils';
 import { initializeStore } from './store';
@@ -193,6 +194,9 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             this.tokenController = new TokenController(this);
             const extension = this.tokenController.getExtension();
             this.registerEditorExtension([extension]);
+
+            // Calendar metadata autocomplete: @event, @time, @rem, @dur, etc.
+            this.registerEditorSuggest(new CalendarTokenSuggest(this.app));
 
             // Initialize UI state
             this.updateRibbonStatus(useStore.getState().status);
