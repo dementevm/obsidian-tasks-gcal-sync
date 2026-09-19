@@ -29,13 +29,24 @@ https://www.googleapis.com/auth/calendar.events.owned
 - Google OAuth Web application client
 - OAuth bridge at `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
 
-## Task syntax
+## Task and reminder syntax
 
-The upstream syntax is preserved:
+Checkbox tasks keep the upstream syntax:
 
 ```markdown
 - [ ] Call service 📅 2026-09-21 ⏰ 14:30 🔔30m
 ```
+
+Informational reminders/events use `📆` and do not have completion state:
+
+```markdown
+- 📆 Wife has a manicure 📅 2026-09-21
+```
+
+For `📆` events with no explicit `⏰` time, the plugin uses the configurable
+**Morning Event Time** (09:00 by default) and creates a popup reminder at the
+event start. If neither `⏱` nor `➡️` is present, the event lasts 5 minutes
+by default.
 
 Examples:
 
@@ -44,7 +55,22 @@ Examples:
 - [ ] Appointment 📅 2026-09-21 ⏰ 14:30
 - [ ] Appointment with reminder 📅 2026-09-21 ⏰ 14:30 🔔30m
 - [ ] Time block 📅 2026-09-21 ⏰ 14:30 ➡️ 15:30 🔔15m
+- 📆 Morning reminder 📅 2026-09-21
+- 📆 Doctor 📅 2026-09-21 ⏰ 14:00 ⏱45m 🔔1h
 ```
+
+Explicit end time `➡️` takes precedence over `⏱` duration.
+
+### Editor suggestions
+
+Type `@` in a Markdown list line to open the plugin's metadata suggestions:
+
+- `@event` → 📆
+- `@date` → 📅
+- `@time` → ⏰
+- `@rem` → 🔔
+- `@dur` → ⏱
+- `@end` → ➡️
 
 ## Privacy model
 
