@@ -26,7 +26,9 @@ export interface Task {
     eventId?: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
+    kind?: 'task' | 'event';
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -40,7 +42,9 @@ export interface TaskMetadata {
     date: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
+    kind?: 'task' | 'event';
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -75,6 +79,7 @@ export interface GoogleCalendarSettings {
     calendarId: string;
     defaultReminder: number;
     defaultEventDurationMinutes: number;
+    defaultMorningEventTime: string;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
     taskIds: Record<string, string>;
@@ -140,6 +145,7 @@ export interface ParsedTaskData {
     date?: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
 }
 
