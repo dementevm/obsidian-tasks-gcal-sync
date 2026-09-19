@@ -785,12 +785,21 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         }
 
         try {
-            state.startSync();
             state.enableTempSync();
 
-            // Get all tasks
+            // Manual Sync Now is an explicit force-sync. Clear transient anti-duplicate
+            // markers and caches so a rapid second edit is never ignored.
+            state.clearTaskCache();
+            state.clearFileCache();
+            for (const metadata of Object.values(this.settings.taskMetadata)) {
+                metadata.justSynced = false;
+            }
+
+            // Get all tasks from fresh file contents before marking the sync in progress.
             const tasks = await this.taskParser?.getAllTasks() || [];
             console.log(`Found ${tasks.length} tasks to sync`);
+
+            state.startSync();
 
             // Get all Obsidian events from calendar
             const allTaskIds = new Set(tasks.map(t => t.id));
@@ -820,9 +829,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             console.log('✅ Full sync completed');
         } catch (error) {
             console.error('❌ Sync failed:', error);
+            const syncError = error instanceof Error ? error : new Error(String(error));
             state.endSync(false);
-            state.setStatus('error', error instanceof Error ? error : new Error(String(error)));
-            new Notice('Sync failed. Please try again.');
+            state.setStatus('error', syncError);
+            new Notice(`Sync failed: ${syncError.message}`, 10000);
         } finally {
             state.disableTempSync();
         }
