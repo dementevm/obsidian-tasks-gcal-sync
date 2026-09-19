@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     syncEnabled: true,
     calendarId: 'primary',
     defaultReminder: 30,
+    defaultEventDurationMinutes: 30,
     includeFolders: [],  // Empty by default to scan all folders
     taskMetadata: {},
     taskIds: {},
@@ -89,6 +90,20 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     const reminder = parseInt(value);
                     if (!isNaN(reminder) && reminder >= 0) {
                         this.plugin.settings.defaultReminder = reminder;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('Default Event Duration')
+            .setDesc('Duration in minutes for timed tasks that do not specify an end time.')
+            .addText(text => text
+                .setPlaceholder('30')
+                .setValue((this.plugin.settings.defaultEventDurationMinutes ?? 30).toString())
+                .onChange(async (value) => {
+                    const duration = parseInt(value);
+                    if (!isNaN(duration) && duration > 0 && duration <= 1440) {
+                        this.plugin.settings.defaultEventDurationMinutes = duration;
                         await this.plugin.saveSettings();
                     }
                 }));
