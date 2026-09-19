@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     clientSecretName: '',
     oauthRedirectUri: 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/',
     oauth2Tokens: undefined,
-    syncEnabled: true,
+    syncEnabled: false,
     calendarId: 'primary',
     defaultReminder: 30,
     defaultEventDurationMinutes: 30,
