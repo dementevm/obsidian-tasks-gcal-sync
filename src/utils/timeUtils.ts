@@ -2,9 +2,18 @@ export class TimeUtils {
     /**
      * Gets the timezone offset in the format +/-HH:mm
      */
-    static getTimezoneOffset(): string {
-        const date = new Date();
-        const offset = -date.getTimezoneOffset();
+    static getTimezoneOffset(date?: string, time?: string): string {
+        let target = new Date();
+
+        if (date && this.isValidDate(date)) {
+            const [year, month, day] = date.split('-').map(Number);
+            const [hours, minutes] = time && this.isValidTime(time)
+                ? time.split(':').map(Number)
+                : [12, 0];
+            target = new Date(year, month - 1, day, hours, minutes, 0, 0);
+        }
+
+        const offset = -target.getTimezoneOffset();
         const hours = Math.floor(Math.abs(offset) / 60);
         const minutes = Math.abs(offset) % 60;
         return `${offset >= 0 ? '+' : '-'}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
