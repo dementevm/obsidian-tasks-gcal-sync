@@ -795,11 +795,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 metadata.justSynced = false;
             }
 
-            // Get all tasks from fresh file contents before marking the sync in progress.
+            // Get all tasks from fresh file contents. Do not call startSync() here:
+            // processSyncQueue() owns syncInProgress and will set/reset it atomically.
             const tasks = await this.taskParser?.getAllTasks() || [];
             console.log(`Found ${tasks.length} tasks to sync`);
-
-            state.startSync();
 
             // Get all Obsidian events from calendar
             const allTaskIds = new Set(tasks.map(t => t.id));
