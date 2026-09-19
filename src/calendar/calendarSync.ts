@@ -523,7 +523,9 @@ export class CalendarSync {
             date: task.date,
             time: task.time,
             endTime: task.endTime,
+            durationMinutes: task.durationMinutes,
             reminder: task.reminder,
+            kind: task.kind || 'task',
             completed: task.completed,
             createdAt: existingMetadata?.createdAt || currentTime,
             lastModified: currentTime,
@@ -893,17 +895,24 @@ export class CalendarSync {
             throw new Error('Invalid date/time format');
         }
 
-        const startTimezone = this.getTimezoneOffset(task.date, task.time);
-        const version = Date.now().toString(); // Add version tracking
+        const isInformationalEvent = task.kind === 'event';
+        const effectiveTime = task.time || (isInformationalEvent
+            ? (this.plugin.settings.defaultMorningEventTime || '09:00')
+            : undefined);
+        const startTimezone = this.getTimezoneOffset(task.date, effectiveTime);
+        const version = Date.now().toString();
 
-        // Get reminder value - use default if no explicit reminder is set
-        const reminderMinutes = task.reminder ?? this.plugin.settings.defaultReminder;
-        const reminderOverrides = reminderMinutes ? [{
+        // Informational events without 🔔 remind at the event start (0 minutes before).
+        // Checkbox tasks retain the existing configurable default reminder.
+        const reminderMinutes = task.reminder ?? (isInformationalEvent
+            ? 0
+            : this.plugin.settings.defaultReminder);
+        const reminderOverrides = [{
             method: 'popup' as const,
             minutes: reminderMinutes
-        }] : [];
+        }];
 
-        if (!task.time) {
+        if (!effectiveTime) {
             return {
                 summary: task.title,
                 start: { date: task.date },
@@ -913,6 +922,7 @@ export class CalendarSync {
                     private: {
                         obsidianTaskId: task.id,
                         isObsidianTask: 'true',
+                        obsidianItemKind: task.kind || 'task',
                         version
                     }
                 },
@@ -923,18 +933,19 @@ export class CalendarSync {
             };
         }
 
-        // For time-specific events
-        const startDateTime = `${task.date}T${task.time}:00${startTimezone}`;
+        // For time-specific events. Informational events without ⏰ use the configured
+        // morning time; checkbox tasks without ⏰ remain all-day events.
+        const startDateTime = `${task.date}T${effectiveTime}:00${startTimezone}`;
 
         let endDate: string;
         let endTime: string;
 
         if (task.endTime) {
-            endDate = task.endTime <= task.time ? this.addDays(task.date, 1) : task.date;
+            endDate = task.endTime <= effectiveTime ? this.addDays(task.date, 1) : task.date;
             endTime = task.endTime;
         } else {
-            const duration = this.plugin.settings.defaultEventDurationMinutes ?? 5;
-            const calculatedEnd = this.addMinutes(task.date, task.time, duration);
+            const duration = task.durationMinutes ?? this.plugin.settings.defaultEventDurationMinutes ?? 5;
+            const calculatedEnd = this.addMinutes(task.date, effectiveTime, duration);
             endDate = calculatedEnd.date;
             endTime = calculatedEnd.time;
         }
