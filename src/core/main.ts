@@ -309,16 +309,21 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                             const state = useStore.getState();
                             try {
                                 state.enableTempSync();
-                                state.startSync();
+                                state.clearTaskCache();
+                                state.invalidateFileCache(file.path);
+                                for (const metadata of Object.values(this.settings.taskMetadata)) {
+                                    metadata.justSynced = false;
+                                }
                                 const tasks = await this.taskParser.parseTasksFromFile(file);
                                 await state.enqueueTasks(tasks.filter(t => t?.id));
                                 await state.processSyncQueueNow();
                                 state.endSync(true);
                                 new Notice('Tasks synced with Google Calendar');
                             } catch (error) {
-                                LogUtils.error(`Failed to sync tasks from ${file.path}:`, error);
+                                const syncError = error instanceof Error ? error : new Error(String(error));
+                                LogUtils.error(`Failed to sync tasks from ${file.path}:`, syncError);
                                 state.endSync(false);
-                                new Notice('Failed to sync tasks with Google Calendar');
+                                new Notice(`Sync failed: ${syncError.message}`, 10000);
                             } finally {
                                 state.disableTempSync();
                             }
