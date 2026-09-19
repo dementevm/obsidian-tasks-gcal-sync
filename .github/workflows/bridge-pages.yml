@@ -30,13 +30,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure Pages
+        id: pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
 
       - name: Upload bridge
+        if: steps.pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v4
         with:
           path: bridge
 
       - name: Deploy
+        if: steps.pages.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Pages not enabled
+        if: steps.pages.outcome != 'success'
+        run: echo "GitHub Pages is not enabled for this repository yet; bridge deployment skipped."
