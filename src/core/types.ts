@@ -65,6 +65,7 @@ export interface GoogleCalendarSettings {
     encryptedOAuth2Tokens?: string; // Encrypted tokens (replaces oauth2Tokens when encrypted)
     tokensEncrypted?: boolean; // Flag indicating tokens are stored encrypted
     syncEnabled: boolean;
+    calendarId: string;
     defaultReminder: number;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
