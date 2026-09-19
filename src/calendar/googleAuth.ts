@@ -57,7 +57,8 @@ export class GoogleAuthManager {
 
     async authorize(): Promise<void> {
         this.validateConfiguration();
-        await this.cleanup();
+        this.clearTemporaryAuthState();
+        this.plugin.mobileAuthInitiated = false;
 
         const verifier = this.generateCodeVerifier();
         const challenge = await this.generateCodeChallenge(verifier);
@@ -283,7 +284,9 @@ export class GoogleAuthManager {
     }
 
     async cleanup(): Promise<void> {
-        this.clearTemporaryAuthState();
+        // Do not clear PKCE state here. Obsidian/iOS may unload the plugin while
+        // the system browser is handling OAuth. The pending state is cleared by
+        // a new authorize() call, a completed callback, or revokeAccess().
         this.plugin.mobileAuthInitiated = false;
     }
 
