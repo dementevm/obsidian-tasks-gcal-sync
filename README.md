@@ -18,7 +18,7 @@ This repository started from [Sasoon/obsidian-gcal-sync](https://github.com/Saso
 The plugin requests only:
 
 ```text
-https://www.googleapis.com/auth/calendar.events
+https://www.googleapis.com/auth/calendar.events.owned
 ```
 
 ## Requirements
