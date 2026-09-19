@@ -591,6 +591,28 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+
+        // One-time migration from the upstream plugin, where the OAuth client
+        // secret could be stored directly in data.json.
+        if (this.settings.clientSecret) {
+            const migratedSecretName = 'obsidian-tasks-gcal-sync-client-secret';
+            this.app.secretStorage.setSecret(migratedSecretName, this.settings.clientSecret);
+            this.settings.clientSecretName = migratedSecretName;
+            this.settings.clientSecret = undefined;
+            await this.saveSettings();
+            LogUtils.debug('Migrated legacy OAuth client secret to SecretStorage');
+        }
+
+        // Never keep legacy OAuth token copies in data.json. Users migrating
+        // from upstream authenticate once again into device-local SecretStorage.
+        if (this.settings.oauth2Tokens ||
+            this.settings.encryptedOAuth2Tokens ||
+            this.settings.tokensEncrypted) {
+            this.settings.oauth2Tokens = undefined;
+            this.settings.encryptedOAuth2Tokens = undefined;
+            this.settings.tokensEncrypted = false;
+            await this.saveSettings();
+        }
     }
 
     private initializeRibbonIcon() {
