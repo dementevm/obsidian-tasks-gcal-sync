@@ -725,8 +725,8 @@ export class CalendarSync {
         });
     }
 
-    public getTimezoneOffset(): string {
-        return TimeUtils.getTimezoneOffset();
+    public getTimezoneOffset(date?: string, time?: string): string {
+        return TimeUtils.getTimezoneOffset(date, time);
     }
 
     public async findExistingEvent(task: Task): Promise<string | null> {
@@ -857,8 +857,8 @@ export class CalendarSync {
             return false;
         }
 
-        // Check for DST transitions
-        const timezone = this.getTimezoneOffset();
+        // Validate using the offset applicable to the event date, not today's offset.
+        const timezone = this.getTimezoneOffset(date, time);
         const dateTime = time ? `${date}T${time}:00${timezone}` : date;
         const parsed = new Date(dateTime);
         if (isNaN(parsed.getTime())) {
@@ -869,13 +869,31 @@ export class CalendarSync {
         return true;
     }
 
+    private addDays(date: string, days: number): string {
+        const [year, month, day] = date.split('-').map(Number);
+        const value = new Date(Date.UTC(year, month - 1, day));
+        value.setUTCDate(value.getUTCDate() + days);
+        return value.toISOString().slice(0, 10);
+    }
+
+    private addMinutes(date: string, time: string, minutesToAdd: number): { date: string; time: string } {
+        const [year, month, day] = date.split('-').map(Number);
+        const [hours, minutes] = time.split(':').map(Number);
+        const value = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+        value.setUTCMinutes(value.getUTCMinutes() + minutesToAdd);
+        return {
+            date: value.toISOString().slice(0, 10),
+            time: value.toISOString().slice(11, 16)
+        };
+    }
+
     private createEventFromTask(task: Task): GoogleCalendarEventInput {
         // Validate date/time
         if (!this.validateDateTime(task.date, task.time)) {
             throw new Error('Invalid date/time format');
         }
 
-        const timezone = this.getTimezoneOffset();
+        const startTimezone = this.getTimezoneOffset(task.date, task.time);
         const version = Date.now().toString(); // Add version tracking
 
         // Get reminder value - use default if no explicit reminder is set
@@ -889,7 +907,8 @@ export class CalendarSync {
             return {
                 summary: task.title,
                 start: { date: task.date },
-                end: { date: task.date },
+                // Google Calendar uses an exclusive end date for all-day events.
+                end: { date: this.addDays(task.date, 1) },
                 extendedProperties: {
                     private: {
                         obsidianTaskId: task.id,
@@ -905,10 +924,23 @@ export class CalendarSync {
         }
 
         // For time-specific events
-        const startDateTime = `${task.date}T${task.time}:00${timezone}`;
-        const endDateTime = task.endTime
-            ? `${task.date}T${task.endTime}:00${timezone}`
-            : `${task.date}T${task.time}:00${timezone}`;
+        const startDateTime = `${task.date}T${task.time}:00${startTimezone}`;
+
+        let endDate: string;
+        let endTime: string;
+
+        if (task.endTime) {
+            endDate = task.endTime <= task.time ? this.addDays(task.date, 1) : task.date;
+            endTime = task.endTime;
+        } else {
+            const duration = this.plugin.settings.defaultEventDurationMinutes ?? 30;
+            const calculatedEnd = this.addMinutes(task.date, task.time, duration);
+            endDate = calculatedEnd.date;
+            endTime = calculatedEnd.time;
+        }
+
+        const endTimezone = this.getTimezoneOffset(endDate, endTime);
+        const endDateTime = `${endDate}T${endTime}:00${endTimezone}`;
 
         return {
             summary: task.title,
