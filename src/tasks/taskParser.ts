@@ -332,25 +332,23 @@ export class TaskParser {
             return false;
         }
 
-        // Validate time range if both times are present
-        if (taskData.time && taskData.endTime) {
-            const startTime = taskData.time.split(':').map(Number);
-            const endTime = taskData.endTime.split(':').map(Number);
-            const startMinutes = startTime[0] * 60 + startTime[1];
-            const endMinutes = endTime[0] * 60 + endTime[1];
+        // End times at or before the start time are intentional: CalendarSync
+        // interprets them as ending on the following day.
 
-            if (startMinutes >= endMinutes) {
-                LogUtils.debug(`Invalid time range: ${taskData.time} - ${taskData.endTime}`);
+        // Google Calendar popup reminders are limited to four weeks.
+        if (taskData.reminder !== undefined) {
+            if (typeof taskData.reminder !== 'number' ||
+                taskData.reminder < 0 ||
+                taskData.reminder > 40320) {
+                LogUtils.debug(`Invalid reminder value: ${taskData.reminder}`);
                 return false;
             }
         }
 
-        // Validate reminder
-        if (taskData.reminder !== undefined) {
-            if (typeof taskData.reminder !== 'number' || taskData.reminder <= 0) {
-                LogUtils.debug(`Invalid reminder value: ${taskData.reminder}`);
-                return false;
-            }
+        if (taskData.durationMinutes !== undefined &&
+            (taskData.durationMinutes <= 0 || taskData.durationMinutes > 1440)) {
+            LogUtils.debug(`Invalid duration value: ${taskData.durationMinutes}`);
+            return false;
         }
 
         return true;
