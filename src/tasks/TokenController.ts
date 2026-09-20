@@ -73,6 +73,37 @@ export class TokenController {
         if (idMatches.length === 0) return line
 
         const taskIdText = idMatches[0][0]
+
+        // Fast path: if the private ID is already directly after the task/event
+        // marker and every complete calendar-only token is already in the
+        // metadata prefix, leave the line byte-for-byte untouched. In
+        // particular, do not collapse spaces while the user is editing a title:
+        // replacing the whole line for cosmetic whitespace changes can move the
+        // CodeMirror cursor back to the start of the task.
+        if (idMatches.length === 1) {
+            const canonicalMatch = line.match(
+                /^(\s*-\s+(?:\[[ xX]\]|📆))\s+(<!-- task-id: [a-z0-9]+ -->)(.*)$/
+            )
+
+            if (canonicalMatch) {
+                let tail = canonicalMatch[3].trimStart()
+                const tokenAtStart =
+                    /^(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+                const tokenAnywhere =
+                    /(?:^|\s)(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+
+                while (true) {
+                    const prefixToken = tail.match(tokenAtStart)
+                    if (!prefixToken) break
+                    tail = tail.slice(prefixToken[0].length).trimStart()
+                }
+
+                if (!tokenAnywhere.test(tail)) {
+                    return line
+                }
+            }
+        }
+
         let withoutIds = line.replace(this.ID_PATTERN, '')
 
         const anchorMatch =
@@ -938,16 +969,23 @@ export class TokenController {
 
                 const atOffset = prefix.length - match[0].length
                 const charBefore = atOffset > 0 ? prefix.charAt(atOffset - 1) : ''
-                if (charBefore && !/\s/.test(charBefore)) return
+                const beforeAt = prefix.slice(0, atOffset)
+                const followsCalendarMetadata =
+                    /(?:📅\s*\d{4}-\d{2}-\d{2}|⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])$/i
+                        .test(beforeAt)
+                if (charBefore && !/\s/.test(charBefore) && !followsCalendarMetadata) return
 
                 // @event is a line-type shortcut, not task metadata. Only expand
                 // it immediately after a plain list marker.
                 if (key === 'event' && prefix.slice(0, atOffset).trim() !== '-') return
 
+                const leadingSpace =
+                    charBefore && !/\s/.test(charBefore) ? ' ' : ''
+
                 replacements.push({
                     from: line.from + atOffset,
                     to: toB,
-                    insert: replacement
+                    insert: leadingSpace + replacement
                 })
             })
 
