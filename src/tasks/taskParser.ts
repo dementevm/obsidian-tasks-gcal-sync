@@ -360,7 +360,7 @@ export class TaskParser {
         // Additional logging for task parser verbose mode
         if (result.changed && this.plugin.settings.verboseLogging) {
             if (result.changes?.title) {
-                LogUtils.debug(`Title changed: "${metadata?.title}" → "${task.title}"`);
+                LogUtils.debug(`Title changed for calendar item ${task.id}`);
             }
         }
 
