@@ -354,6 +354,53 @@ export class RepairManager {
         }
     }
 
+    public async previewOrphanCleanup(): Promise<{
+        activeItems: number;
+        orphanEvents: number;
+        orphanMetadata: number;
+        duplicateEvents: number;
+    }> {
+        const tasks = await this.getAllTasks();
+        const activeTaskIds = new Set(tasks.keys());
+        const calendarEvents = await this.plugin.calendarSync?.findAllObsidianEvents({ forceFresh: true }) || [];
+
+        let orphanEvents = 0;
+        let duplicateEvents = 0;
+        const counts = new Map<string, number>();
+
+        for (const event of calendarEvents) {
+            const taskId = event.extendedProperties?.private?.obsidianTaskId;
+            if (!taskId) continue;
+            counts.set(taskId, (counts.get(taskId) || 0) + 1);
+            if (!activeTaskIds.has(taskId)) orphanEvents++;
+        }
+
+        for (const [taskId, count] of counts) {
+            if (activeTaskIds.has(taskId) && count > 1) {
+                duplicateEvents += count - 1;
+            }
+        }
+
+        const orphanMetadata = Object.keys(this.plugin.settings.taskMetadata)
+            .filter(taskId => !activeTaskIds.has(taskId))
+            .length;
+
+        return {
+            activeItems: activeTaskIds.size,
+            orphanEvents,
+            orphanMetadata,
+            duplicateEvents
+        };
+    }
+
+    public async cleanupOrphansExplicitly(): Promise<void> {
+        const tasks = await this.getAllTasks();
+        const activeTaskIds = new Set(tasks.keys());
+        const calendarEvents = await this.plugin.calendarSync?.findAllObsidianEvents({ forceFresh: true }) || [];
+        await this.deleteOrphanedEvents(calendarEvents, activeTaskIds);
+        await this.cleanupOrphanedMetadata(activeTaskIds);
+    }
+
     public async deleteOrphanedEvents(
         calendarEvents: GoogleCalendarEvent[],
         activeTaskIds: Set<string>,
@@ -562,76 +609,8 @@ export class RepairManager {
     }
 
     private async getMarkdownFiles(): Promise<TFile[]> {
-        // Get all markdown files in the vault
-        const allFiles = this.plugin.app.vault.getMarkdownFiles();
-        LogUtils.debug(`Found ${allFiles.length} total markdown files in vault`);
-        
-        // Log the include folder settings
-        const includeSettings = this.plugin.settings.includeFolders || [];
-        LogUtils.debug(`Folder inclusion settings: ${includeSettings.length > 0 ? JSON.stringify(includeSettings) : 'None (all files included)'}`);
-        
-        // If no include settings specified, return all markdown files
-        if (!includeSettings.length) {
-            LogUtils.debug(`Using all ${allFiles.length} markdown files for task search`);
-            return allFiles;
-        }
-        
-        // Create result array for matched files
-        const matchedFiles: TFile[] = [];
-        
-        // Process each inclusion path
-        for (const includePath of includeSettings) {
-            // Check if this is a direct file reference (not ending with /)
-            const isLikelyFile = !includePath.endsWith('/') && includePath.includes('.');
-            
-            if (isLikelyFile) {
-                // Try to get this specific file
-                const exactFile = allFiles.find(file => file.path === includePath);
-                if (exactFile) {
-                    LogUtils.debug(`Found exact file match: ${includePath}`);
-                    matchedFiles.push(exactFile);
-                    continue;
-                }
-            }
-            
-            // Handle as folder (strict matching with trailing slash)
-            const folderMatchedFiles = allFiles.filter(file => 
-                file.path === includePath || file.path.startsWith(includePath + '/')
-            );
-            
-            if (folderMatchedFiles.length > 0) {
-                LogUtils.debug(`Found ${folderMatchedFiles.length} files in folder: ${includePath}`);
-                matchedFiles.push(...folderMatchedFiles);
-                continue;
-            }
-            
-            // Try lenient folder matching (without trailing slash)
-            const folderNoSlash = includePath.endsWith('/') ? includePath.slice(0, -1) : includePath;
-            const lenientMatches = allFiles.filter(file => 
-                file.path === folderNoSlash || file.path.startsWith(folderNoSlash + '/')
-            );
-            
-            if (lenientMatches.length > 0) {
-                LogUtils.debug(`Found ${lenientMatches.length} files with lenient matching for: ${includePath}`);
-                matchedFiles.push(...lenientMatches);
-            }
-        }
-        
-        // Remove duplicates
-        const uniqueFiles = Array.from(new Set(matchedFiles.map(file => file.path)))
-            .map(path => allFiles.find(file => file.path === path))
-            .filter((file): file is TFile => file !== undefined);
-        
-        LogUtils.debug(`After filtering: ${uniqueFiles.length} markdown files match inclusion settings`);
-        
-        // If no files found after all approaches, use all files with a warning
-        if (uniqueFiles.length === 0) {
-            LogUtils.warn(`WARNING: No files match your folder inclusion settings. ` +
-                          `Using all vault files as a fallback for repair. ` +
-                          `Check your folder inclusion settings in the plugin settings.`);
-            return allFiles;
-        }
-        
-        return uniqueFiles;
+        // Repair uses exactly the same explicit scope as normal sync. There is
+        // intentionally no "fall back to the whole vault" behavior.
+        return this.plugin.taskParser.getFilteredFiles();
     }
 } 
