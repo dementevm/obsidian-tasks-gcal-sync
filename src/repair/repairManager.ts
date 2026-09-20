@@ -563,8 +563,11 @@ export class RepairManager {
         
         LogUtils.debug(`Searching for tasks in ${files.length} markdown files`);
         
-        // Force clear the file cache to ensure we get fresh content
+        // Explicit repair/preview must be able to parse while Auto-sync is OFF.
+        // tempSyncEnableCount is reference-counted, so nested callers remain safe.
         const state = useStore.getState();
+        state.enableTempSync();
+        try {
         
         // Process files in batches to avoid overwhelming the system
         const BATCH_SIZE = 20;
@@ -604,8 +607,11 @@ export class RepairManager {
             }
         }
         
-        LogUtils.debug(`Found a total of ${tasks.size} tasks with IDs across all files`);
-        return tasks;
+            LogUtils.debug(`Found a total of ${tasks.size} tasks with IDs across all files`);
+            return tasks;
+        } finally {
+            state.disableTempSync();
+        }
     }
 
     private async getMarkdownFiles(): Promise<TFile[]> {
