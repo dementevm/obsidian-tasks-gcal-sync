@@ -20,13 +20,13 @@ import { DiagnosticsModal } from '../ui/DiagnosticsModal';
 import { applyShareableSetup, createSetupLink, decodeSetup } from '../utils/setupTransfer';
 
 export default class GoogleCalendarSyncPlugin extends Plugin {
-    settings: GoogleCalendarSettings;
+    settings!: GoogleCalendarSettings;
     public metadataManager: MetadataManager | null = null;
     public authManager: GoogleAuthManager | null = null;
     public calendarSync: CalendarSync | null = null;
     public repairManager: RepairManager | null = null;
-    public taskParser: TaskParser;
-    public tokenController: TokenController;
+    public taskParser!: TaskParser;
+    public tokenController!: TokenController;
     private statusBarItem: HTMLElement | null = null;
     private ribbonIcon: HTMLElement | null = null;
     private unsubscribeStore: (() => void) | undefined = undefined;
@@ -294,7 +294,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         // Register file change events with shorter debounce
         this.registerEvent(
             this.app.vault.on('modify',
-                debounce(async (file: TFile) => {
+                debounce(async (file: TAbstractFile) => {
+                    if (!(file instanceof TFile)) return;
                     if (!useStore.getState().isSyncAllowed()) return;
                     if (!file.path.endsWith('.md')) return;
                     if (!this.taskParser.isFileInScope(file)) return;
