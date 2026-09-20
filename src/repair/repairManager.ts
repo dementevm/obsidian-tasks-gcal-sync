@@ -276,10 +276,10 @@ export class RepairManager {
                         processedCount += batch.length;
                         
                         onProgress?.({
-                            phase: 'create',
+                            phase: RepairPhases.create,
                             processedItems: processedCount,
                             totalItems: tasksWithoutEvents.length,
-                            currentOperation: 'Creating missing events',
+                            currentOperation: RepairOperations.CREATE,
                             failedItems: Array.from(errors.keys()),
                             retryCount: 0,
                             currentBatch: batchNum,
@@ -317,10 +317,10 @@ export class RepairManager {
                     }
                     
                     onProgress?.({
-                        phase: 'update',
+                        phase: RepairPhases.update,
                         processedItems: processed.size,
                         totalItems: tasks.size,
-                        currentOperation: 'Processing tasks',
+                        currentOperation: RepairOperations.UPDATE,
                         failedItems: Array.from(errors.keys()),
                         retryCount: 0,
                         currentBatch: 1,
