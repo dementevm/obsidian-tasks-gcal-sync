@@ -30,25 +30,6 @@ export interface GoogleCalendarEvent {
     };
 }
 
-export interface RepairContext {
-    tasks: Task[];
-    events: GoogleCalendarEvent[];
-    metadata: Record<string, TaskMetadata>;
-    repairToken: string;
-    startTime: number;
-    timeZone: string;
-    currentBatch: number;
-    completedOperations: string[];
-    failedOperations: Map<string, Error>;
-}
-
-export interface RepairCheckpoint {
-    batchNumber: number;
-    completedItems: string[];
-    context: RepairContext;
-    timestamp: number;
-}
-
 export type RepairPhase = 'init' | 'analysis' | 'delete' | 'update' | 'create' | 'metadata' | 'complete';
 
 export interface RepairProgress {
@@ -73,14 +54,6 @@ export const RepairOperations = {
     COMPLETE: 'Completing repair'
 } as const;
 
-export type RepairOperation = typeof RepairOperations[keyof typeof RepairOperations];
-
-export interface RepairPlan {
-    toDelete: GoogleCalendarEvent[];
-    toUpdate: Array<{ task: Task; event: GoogleCalendarEvent }>;
-    toCreate: Task[];
-    totalItems: number;
-}
 
 export interface RepairResult {
     success: boolean;
