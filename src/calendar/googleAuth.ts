@@ -5,7 +5,6 @@ import { LogUtils } from '../utils/logUtils';
 
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 const CANONICAL_REDIRECT_URI = 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/';
 
@@ -342,40 +341,10 @@ export class GoogleAuthManager {
         await this.plugin.saveSettings();
     }
 
-    async revokeAccess(): Promise<void> {
-        const token = this.refreshToken
-            ?? this.app.secretStorage.getSecret(this.refreshTokenSecretId)
-            ?? this.accessToken;
-
-        if (token) {
-            try {
-                await requestUrl({
-                    url: GOOGLE_REVOKE_ENDPOINT,
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ token }).toString()
-                });
-            } catch (error) {
-                LogUtils.warn('Google token revocation request failed:', error);
-            }
-        }
-
-        this.accessToken = null;
-        this.refreshToken = null;
-        this.tokenExpiry = null;
-        this.app.secretStorage.setSecret(this.refreshTokenSecretId, '');
-        this.clearTemporaryAuthState();
-
-        this.plugin.settings.oauth2Tokens = undefined;
-        this.plugin.settings.encryptedOAuth2Tokens = undefined;
-        this.plugin.settings.tokensEncrypted = false;
-        await this.plugin.saveSettings();
-    }
-
     async cleanup(): Promise<void> {
         // Do not clear PKCE state here. Obsidian/iOS may unload the plugin while
         // the system browser is handling OAuth. The pending state is cleared by
-        // a new authorize() call, a completed callback, or revokeAccess().
+        // a new authorize() call or a completed callback.
         this.plugin.mobileAuthInitiated = false;
     }
 
