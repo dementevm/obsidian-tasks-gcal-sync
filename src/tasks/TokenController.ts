@@ -186,7 +186,11 @@ export class TokenController {
     }
 
     private isSyncItemLine(line: string): boolean {
-        return /^\s*-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
+        // Plain checklists are not calendar items. A tracked item must explicitly
+        // contain a calendar date marker so shopping lists / arbitrary checklists
+        // remain completely untouched by this plugin.
+        const isTaskOrEvent = /^\s*-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
+        return isTaskOrEvent && /📅\s*\d{4}-\d{2}-\d{2}/.test(line);
     }
 
     private checkForNewTasks(editor: Editor) {
