@@ -422,7 +422,7 @@ export class TaskParser {
                         const offset = content.length + formattedTaskLine.length + 1;
                         this.plugin.tokenController.generateTaskId(view, offset);
                     }
-                    LogUtils.debug(`Created task: ${task.title}`);
+                    LogUtils.debug('Created imported calendar task');
                 } finally {
                     state.removeProcessingTask(lockKey);
                 }
@@ -735,7 +735,7 @@ export class TaskParser {
                     }
                 }
             } catch (error) {
-                LogUtils.error(`Failed to get task ${taskId} from known file ${metadata.filePath}:`, error);
+                LogUtils.error(`Failed to get task ${taskId} from its known file:`, error);
                 // Fall back to full search below
             }
         }
