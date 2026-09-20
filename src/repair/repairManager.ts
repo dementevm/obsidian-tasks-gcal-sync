@@ -356,7 +356,7 @@ export class RepairManager {
 
         } catch (error) {
             const catastrophicError = new CatastrophicError(
-                `Catastrophic repair failure: ${error.message}`,
+                `Catastrophic repair failure: ${error instanceof Error ? error.message : String(error)}`,
                 'unknown'
             );
 
