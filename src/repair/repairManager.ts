@@ -142,7 +142,6 @@ export class RepairManager {
             // Enhanced Sync phase - more robust rebuilding of events
             if (tasks.size > 0) {
                 const store = useStore.getState();
-                store.startSync();
                 store.enableTempSync();
 
                 try {
