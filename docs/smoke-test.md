@@ -1,6 +1,6 @@
 # Release smoke test
 
-Status: **PASSED** on 2026-09-20 for the current release candidate on desktop and iOS.
+Status: **PASSED** on 2026-09-20 for public release `1.0.0` on desktop and iOS. Release `1.0.1` changes only release metadata/documentation and does not change runtime plugin code.
 
 Run this checklist again before every public release when synchronization, OAuth, task parsing, calendar targeting, SecretStorage, or build/release code changes.
 
@@ -162,4 +162,5 @@ A release candidate is ready for merge/tagging when:
 - [x] clean `npm ci && npm run build` succeeds locally;
 - [x] GitHub Build workflow is green on the release-preparation/final main commit;
 - [x] release version metadata is bumped consistently before tagging;
-- [ ] the tag exactly matches `manifest.json.version`.
+- [x] the published `1.0.0` tag exactly matched `manifest.json.version` at release time.
+- [ ] the `1.0.1` tag exactly matches `manifest.json.version` before publishing the maintenance release.
