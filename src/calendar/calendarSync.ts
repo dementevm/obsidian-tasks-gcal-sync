@@ -611,7 +611,7 @@ export class CalendarSync {
                 throw new Error('Auth manager not initialized');
             }
 
-            const accessToken = await this.plugin.authManager.getValidAccessToken();
+            let accessToken = await this.plugin.authManager.getValidAccessToken();
             const url = `${this.BASE_URL}${endpoint}`;
 
             const requestUrlString = method === 'GET' && params ?
@@ -621,15 +621,29 @@ export class CalendarSync {
             LogUtils.debug(`Making API request: ${method} ${endpoint}`);
 
             try {
-                const response = await this.requestWithTimeout({
+                const performRequest = (token: string) => this.requestWithTimeout({
                     url: requestUrlString,
                     method,
                     headers: {
-                        'Authorization': `Bearer ${accessToken}`,
+                        'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json',
                     },
                     body: method !== 'GET' && params ? JSON.stringify(params) : undefined
                 });
+
+                let response = await performRequest(accessToken);
+
+                // A bearer token can be invalidated before its advertised
+                // expiry (for example after OAuth activity on another device).
+                // A 401 means Google rejected authorization before processing
+                // the Calendar operation, so refresh locally and retry exactly
+                // once. This is safe even for POST because the rejected request
+                // was not authorized to create anything.
+                if (response.status === 401) {
+                    LogUtils.warn('Calendar API returned 401; refreshing device-local access token once');
+                    accessToken = await this.plugin.authManager.refreshAfterUnauthorized();
+                    response = await performRequest(accessToken);
+                }
 
                 // Special handling for 410 Gone on DELETE requests
                 if (response.status === 410 && method === 'DELETE') {
@@ -669,7 +683,9 @@ export class CalendarSync {
                     if (apiError.status === 400) {
                         new Notice(`Calendar API error (400): Check your authenticated account has calendar access`);
                     } else if (apiError.status === 401) {
-                        new Notice(`Authentication error (401): Your session has expired. Please reconnect to Google Calendar.`);
+                        useStore.getState().setAuthenticated(false);
+                        useStore.getState().setStatus('disconnected');
+                        new Notice(`Authentication error (401): Google rejected refreshed credentials. Please reconnect this device.`);
                     } else if (apiError.status === 403) {
                         new Notice(`Permission error (403): You don't have permission to access this calendar.`);
                     }
