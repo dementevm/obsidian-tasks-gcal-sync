@@ -74,7 +74,7 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
     ): EditorSuggestTriggerInfo | null {
         const line = editor.getLine(cursor.line);
         const beforeCursor = line.slice(0, cursor.ch);
-        const match = beforeCursor.match(/(?:^|\s)@([a-z]*)$/i);
+        const match = beforeCursor.match(/@([a-z]*)$/i);
 
         if (!match) {
             return null;
@@ -89,6 +89,18 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
         // prose containing @ mentions is unaffected.
         const linePrefix = beforeCursor.slice(0, atIndex);
         if (!/^\s*-/.test(linePrefix)) {
+            return null;
+        }
+
+        // Obsidian Tasks can leave the cursor immediately after one of its
+        // metadata values (most notably 📅 YYYY-MM-DD), with no trailing space.
+        // Treat that as a valid shortcut boundary as well as ordinary whitespace.
+        const charBefore = atIndex > 0 ? beforeCursor.charAt(atIndex - 1) : '';
+        const followsCalendarMetadata =
+            /(?:📅\s*\d{4}-\d{2}-\d{2}|⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])$/i
+                .test(linePrefix);
+
+        if (charBefore && !/\s/.test(charBefore) && !followsCalendarMetadata) {
             return null;
         }
 
@@ -125,8 +137,14 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
             return;
         }
 
+        const line = this.context.editor.getLine(this.context.start.line);
+        const charBefore = this.context.start.ch > 0
+            ? line.charAt(this.context.start.ch - 1)
+            : '';
+        const leadingSpace = charBefore && !/\s/.test(charBefore) ? ' ' : '';
+
         this.context.editor.replaceRange(
-            `${value.token} `,
+            `${leadingSpace}${value.token} `,
             this.context.start,
             this.context.end
         );

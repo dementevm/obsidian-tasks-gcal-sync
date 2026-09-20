@@ -5,12 +5,12 @@ import { LogUtils } from '../utils/logUtils';
 
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
+const CANONICAL_REDIRECT_URI = 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/';
 
 const LEGACY_CLIENT_SECRET_ID = 'obsidian-tasks-gcal-sync-client-secret';
-const REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
-const LEGACY_SCOPED_REFRESH_TOKEN_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
+const REFRESH_TOKEN_SECRET_ID = 'tasks-gcal-sync-refresh-token';
+const LEGACY_REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
 const LOCAL_STATE_PREFIX = 'obsidian-tasks-gcal-sync-oauth-state';
 const LOCAL_VERIFIER_PREFIX = 'obsidian-tasks-gcal-sync-pkce-verifier';
 
@@ -45,7 +45,13 @@ export class GoogleAuthManager {
     }
 
     private get redirectUri(): string {
-        return this.plugin.settings.oauthRedirectUri.trim();
+        return CANONICAL_REDIRECT_URI;
+    }
+
+    private get refreshTokenSecretId(): string {
+        // SecretStorage is already scoped to the current vault. Keep the ID
+        // stable and valid: lowercase letters, numbers, and dashes only.
+        return REFRESH_TOKEN_SECRET_ID;
     }
 
     private getClientSecret(): string | null {
@@ -55,7 +61,7 @@ export class GoogleAuthManager {
             if (configured) return configured;
         }
 
-        // Compatibility with the first privacy fork migration.
+        // Compatibility with the first privacy-fork migration.
         return this.app.secretStorage.getSecret(LEGACY_CLIENT_SECRET_ID);
     }
 
@@ -74,8 +80,9 @@ export class GoogleAuthManager {
         if (!this.clientId) {
             throw new Error('OAuth Client ID is not configured.');
         }
-        if (!this.redirectUri || !this.redirectUri.startsWith('https://')) {
-            throw new Error('OAuth Redirect Bridge URL must be a valid HTTPS URL.');
+        if (this.plugin.settings.oauthRedirectUri &&
+            this.plugin.settings.oauthRedirectUri.trim() !== CANONICAL_REDIRECT_URI) {
+            throw new Error('OAuth Redirect Bridge URL is not the official bridge. Reset the plugin setting before connecting.');
         }
         if (!this.plugin.settings.clientSecretName) {
             throw new Error('OAuth Client Secret is not configured in SecretStorage.');
@@ -183,7 +190,7 @@ export class GoogleAuthManager {
 
     async refreshAccessToken(): Promise<OAuth2Tokens> {
         if (!this.refreshToken) {
-            const stored = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
+            const stored = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
             if (!stored) throw new Error('No refresh token available.');
             this.refreshToken = stored;
         }
@@ -229,7 +236,7 @@ export class GoogleAuthManager {
         }
 
         // Refresh token is intentionally device-local and never enters data.json / LiveSync.
-        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, this.refreshToken);
+        this.app.secretStorage.setSecret(this.refreshTokenSecretId, this.refreshToken);
 
         // Remove legacy token copies from plugin settings when migrating from upstream.
         if (this.plugin.settings.oauth2Tokens ||
@@ -244,20 +251,16 @@ export class GoogleAuthManager {
 
     async loadSavedTokens(): Promise<boolean> {
         try {
-            let refreshToken = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
+            let refreshToken = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
 
-            // SecretStorage is already vault-scoped by Obsidian. Recover tokens
-            // written by private.4/private.5 under an extra namespace, then
-            // normalize back to the stable vault-local slot.
+            // Migrate the earlier valid unscoped ID. SecretStorage is already
+            // vault-local, so adding the vault name to the Secret ID is both
+            // unnecessary and invalid under current Obsidian ID rules.
             if (!refreshToken) {
-                const legacyScopedId =
-                    `${LEGACY_SCOPED_REFRESH_TOKEN_PREFIX}:${this.secretNamespace}`;
-                const scoped = this.app.secretStorage.getSecret(legacyScopedId);
-                if (scoped) {
-                    this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, scoped);
-                    refreshToken = scoped;
-                    LogUtils.debug('Recovered refresh token from redundant scoped SecretStorage slot');
-                }
+                refreshToken = this.app.secretStorage.getSecret(LEGACY_REFRESH_TOKEN_SECRET_ID);
+            }
+            if (refreshToken) {
+                this.app.secretStorage.setSecret(this.refreshTokenSecretId, refreshToken);
             }
 
             if (!refreshToken) return false;
@@ -298,28 +301,38 @@ export class GoogleAuthManager {
         return this.refreshPromise;
     }
 
-    async revokeAccess(): Promise<void> {
-        const token = this.refreshToken
-            ?? this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
-            ?? this.accessToken;
+    /**
+     * Refresh immediately after Calendar API rejected an access token with 401.
+     * Access tokens can become invalid before their advertised expiry; each
+     * device should recover using its own device-local refresh token.
+     */
+    async refreshAfterUnauthorized(): Promise<string> {
+        this.accessToken = null;
+        this.tokenExpiry = null;
 
-        if (token) {
-            try {
-                await requestUrl({
-                    url: GOOGLE_REVOKE_ENDPOINT,
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ token }).toString()
-                });
-            } catch (error) {
-                LogUtils.warn('Google token revocation request failed:', error);
-            }
+        try {
+            const tokens = await this.deduplicatedRefresh();
+            return tokens.access_token;
+        } catch (error) {
+            // Do not keep advertising a verified session after refresh failed.
+            this.accessToken = null;
+            this.refreshToken = null;
+            this.tokenExpiry = null;
+            throw error;
         }
+    }
 
+    /**
+     * Disconnect only this Obsidian device. Do NOT call Google's revoke
+     * endpoint here: revoking the OAuth grant can invalidate credentials used
+     * by other desktop/mobile devices connected with the same Google project.
+     */
+    async clearLocalAuthentication(): Promise<void> {
         this.accessToken = null;
         this.refreshToken = null;
         this.tokenExpiry = null;
-        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, '');
+        this.refreshPromise = null;
+        this.app.secretStorage.setSecret(this.refreshTokenSecretId, '');
         this.clearTemporaryAuthState();
 
         this.plugin.settings.oauth2Tokens = undefined;
@@ -331,15 +344,15 @@ export class GoogleAuthManager {
     async cleanup(): Promise<void> {
         // Do not clear PKCE state here. Obsidian/iOS may unload the plugin while
         // the system browser is handling OAuth. The pending state is cleared by
-        // a new authorize() call, a completed callback, or revokeAccess().
+        // a new authorize() call or a completed callback.
         this.plugin.mobileAuthInitiated = false;
     }
 
     isAuthenticated(): boolean {
-        return Boolean(
-            this.refreshToken ||
-            this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
-        );
+        // A stored refresh token is only a credential candidate. Authentication
+        // becomes true after loadSavedTokens()/OAuth has successfully obtained
+        // an access token on this device.
+        return Boolean(this.accessToken && this.refreshToken && this.tokenExpiry);
     }
 
     private clearTemporaryAuthState(): void {

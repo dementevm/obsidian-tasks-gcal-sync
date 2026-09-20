@@ -344,16 +344,17 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                             // completed occurrence leaves its old calendar event behind.
                             if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
-                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) { // Use a longer window (2 seconds)
-                                    LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping (file handler)`);
+                                const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                    LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago and is unchanged; skipping echo`);
                                     continue;
                                 }
                             }
 
-                            // Only queue if not locked
-                            if (!state.isTaskLocked(task.id)) {
-                                tasksToQueue.push(task);
-                            }
+                            // Never drop a real edit just because the previous
+                            // sync still owns the task lock. enqueueTasks() knows
+                            // how to keep locked items queued for a follow-up pass.
+                            tasksToQueue.push(task);
                         }
 
                         // Enqueue all tasks at once
@@ -416,6 +417,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
                     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
                     if (!view || !view.file) return;
+                    if (!this.taskParser.isFileInScope(view.file)) {
+                        LogUtils.debug(`Ignoring editor changes outside sync scope: ${view.file.path}`);
+                        return;
+                    }
 
                     // Check if the cursor is on a task line
                     const cursorPos = editor.getCursor();
@@ -447,6 +452,11 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
     private async processEditorChanges(file: TFile) {
         const state = useStore.getState();
+        if (!this.taskParser.isFileInScope(file)) {
+            LogUtils.debug(`Ignoring editor sync outside configured scope: ${file.path}`);
+            return;
+        }
+
         try {
             // First check if we can read the file
             try {
@@ -531,8 +541,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 if (!this.calendarSync) {
                     throw new Error('Calendar sync is not initialized; keeping metadata for retry.');
                 }
-                LogUtils.debug(`Deleting calendar event: ${eventId}`);
-                await this.calendarSync.deleteEvent(eventId);
+                const metadata = this.settings.taskMetadata[taskId];
+                const calendarId = metadata?.calendarId || this.settings.calendarId;
+                LogUtils.debug(`Deleting calendar event ${eventId} from calendar ${calendarId}`);
+                await this.calendarSync.deleteEvent(eventId, taskId, calendarId);
                 LogUtils.debug(`Successfully deleted event: ${eventId}`);
             }
 
@@ -632,10 +644,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // Clean up any pending sync operations
             useStore.getState().clearSyncQueue();
 
-            // Clean up metadata
-            if (this.metadataManager) {
-                await this.metadataManager.cleanup();
-            }
+            // Do not run destructive metadata/calendar cleanup during unload.
+            // Orphan/duplicate cleanup is explicit and user-confirmed via Diagnostics.
 
             // Clean up UI elements
             if (this.statusBarItem) {
@@ -909,7 +919,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
         menu.addItem((item: MenuItem) => {
             item
-                .setTitle("Disconnect Google Calendar")
+                .setTitle("Disconnect Google Calendar on this device")
                 .setIcon("log-out")
                 .onClick(() => this.disconnectGoogle());
         });
@@ -1087,11 +1097,14 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
     private async disconnectGoogle() {
         try {
-            if (this.authManager?.isAuthenticated()) {
-                await this.authManager.revokeAccess();
+            if (this.authManager) {
+                // Device-local disconnect only. Revoking the Google OAuth grant
+                // would also invalidate credentials used by the user's other
+                // Obsidian devices.
+                await this.authManager.clearLocalAuthentication();
             }
 
-            // Clear tokens in settings
+            // Clear legacy tokens in settings
             if (this.settings.oauth2Tokens) {
                 this.settings.oauth2Tokens = undefined;
                 await this.saveSettings();

@@ -1,5 +1,4 @@
 import { TFile } from 'obsidian';
-import type { Credentials, OAuth2Client } from 'google-auth-library';
 import "obsidian";
 
 declare module "obsidian" {
@@ -39,6 +38,8 @@ export interface Task {
 export interface TaskMetadata {
     filePath?: string;
     eventId?: string;
+    /** Calendar that owns eventId. eventId must never be reused against another calendar. */
+    calendarId?: string;
     title: string;
     date: string;
     time?: string;
@@ -130,13 +131,6 @@ export interface CacheChangeEvent {
     file?: TFile;
 }
 
-export interface GoogleAuthManagerInterface {
-    getOAuth2Client(): OAuth2Client;
-    startAuthFlow(): Promise<void>;
-    refreshTokens(tokens: Credentials): Promise<Credentials>;
-    revokeTokens(tokens: Credentials): Promise<void>;
-    onunload(): Promise<void>;
-}
 
 // Constants for task versioning and validation
 export const CURRENT_TASK_VERSION = 1;

@@ -1,26 +1,26 @@
-# Source files
+# Development sources and configuration
 src/
+docs/
 tsconfig.json
 esbuild.config.mjs
 version-bump.mjs
 
-# Development files
+# Repository metadata
+.git/
 .github/
-.vscode/
-.idea/
-.env*
-.eslintrc
-.prettierrc
 .gitignore
+NOTICE
 
-# Test files
-__tests__/
-*.test.ts
-*.spec.ts
-
-# Misc
-node_modules/
-npm-debug.log
-*.zip
+# Local/editor files
+.env*
+.idea/
+.vscode/
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Test/build artifacts
+dist/
+*.map
+*.zip
+*.test.*
+*.spec.*

@@ -121,80 +121,13 @@ export class MetadataManager {
         }
     }
 
+    /**
+     * Release in-memory metadata only. Plugin unload/reload must never perform
+     * remote deletions or rewrite persistent metadata as a side effect.
+     */
     async cleanup(): Promise<void> {
-        LogUtils.info('Starting metadata cleanup...');
-        const allFiles = this.plugin.app.vault.getMarkdownFiles();
-        const validTaskIds = new Set<string>();
-        const validMetadata = new Map<string, TaskMetadata>();
-        const orphanedEventIds = new Set<string>();
-
-        try {
-            // First pass: collect all valid task IDs and their current state
-            for (const file of allFiles) {
-                const content = await this.plugin.app.vault.read(file);
-                const matches = Array.from(content.matchAll(/<!-- task-id: ([a-z0-9]+) -->/g));
-
-                // Updated regex to match IDs at the beginning of tasks after the checkbox
-                const taskStates = new Map(Array.from(content.matchAll(/- \[([ xX])\] (?:<!-- task-id: ([a-z0-9]+) -->|.*?<!-- task-id: ([a-z0-9]+) -->)/g))
-                    .map(match => [match[2] || match[3], match[1].toLowerCase() === 'x']));
-
-                for (const match of matches) {
-                    const taskId = match[1];
-                    validTaskIds.add(taskId);
-
-                    // Get existing metadata
-                    const metadata = this.plugin.settings.taskMetadata[taskId];
-                    if (metadata) {
-                        // Update completion state from actual content
-                        const isCompleted = taskStates.get(taskId) || false;
-
-                        // Ensure all required fields exist and are valid
-                        const validatedMetadata: TaskMetadata = {
-                            ...metadata,
-                            filePath: file.path,
-                            eventId: metadata.eventId || undefined,
-                            createdAt: metadata.createdAt || Date.now(),
-                            lastModified: metadata.lastModified || Date.now(),
-                            lastSynced: metadata.lastSynced || Date.now(),
-                            completed: isCompleted
-                        };
-
-                        validMetadata.set(taskId, validatedMetadata);
-                    }
-                }
-            }
-
-            // Collect orphaned event IDs
-            for (const [taskId, metadata] of Object.entries(this.plugin.settings.taskMetadata)) {
-                if (!validTaskIds.has(taskId) && metadata.eventId) {
-                    orphanedEventIds.add(metadata.eventId);
-                }
-            }
-
-            // Clean up orphaned events if sync is available
-            if (this.plugin.calendarSync) {
-                for (const eventId of orphanedEventIds) {
-                    try {
-                        await this.plugin.calendarSync.deleteEvent(eventId);
-                        LogUtils.info(`Cleaned up orphaned event: ${eventId}`);
-                    } catch (error) {
-                        LogUtils.error(`Failed to clean up orphaned event ${eventId}: ${error}`);
-                    }
-                }
-            }
-
-            // Update settings with only valid metadata
-            this.plugin.settings.taskMetadata = Object.fromEntries(validMetadata);
-            await this.plugin.saveSettings();
-
-            // Reset cache
-            this.cache = {};
-
-            LogUtils.info(`Cleanup complete - Valid tasks: ${validTaskIds.size}, Valid metadata: ${validMetadata.size}, Cleaned events: ${orphanedEventIds.size}`);
-        } catch (error) {
-            LogUtils.error(`Failed to complete metadata cleanup: ${error}`);
-            throw ErrorUtils.handleCommonErrors(error);
-        }
+        this.cache = {};
+        LogUtils.debug('Metadata cache cleared');
     }
 
     public async verifyMetadataConsistency(): Promise<void> {

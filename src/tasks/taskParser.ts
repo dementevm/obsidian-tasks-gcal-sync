@@ -93,9 +93,29 @@ export class TaskParser {
         return uniqueFiles;
     }
 
-    public isFileInScope(file: TFile): boolean {
+    public isPathInScope(filePath: string): boolean {
         if (this.plugin.settings.scanEntireVault) return true;
-        return this.getFilteredFiles().some(candidate => candidate.path === file.path);
+
+        const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!normalizedPath) return false;
+
+        const includePaths = (this.plugin.settings.includeFolders || [])
+            .map(path => path.replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, ''))
+            .filter(Boolean);
+
+        if (includePaths.length === 0) return false;
+
+        return includePaths.some(includePath => {
+            const isLikelyFile = includePath.includes('.');
+            if (isLikelyFile) {
+                return normalizedPath === includePath;
+            }
+            return normalizedPath === includePath || normalizedPath.startsWith(includePath + '/');
+        });
+    }
+
+    public isFileInScope(file: TFile): boolean {
+        return this.isPathInScope(file.path);
     }
 
     public async parseTasksFromFile(file: TFile): Promise<Task[]> {
@@ -332,25 +352,23 @@ export class TaskParser {
             return false;
         }
 
-        // Validate time range if both times are present
-        if (taskData.time && taskData.endTime) {
-            const startTime = taskData.time.split(':').map(Number);
-            const endTime = taskData.endTime.split(':').map(Number);
-            const startMinutes = startTime[0] * 60 + startTime[1];
-            const endMinutes = endTime[0] * 60 + endTime[1];
+        // End times at or before the start time are intentional: CalendarSync
+        // interprets them as ending on the following day.
 
-            if (startMinutes >= endMinutes) {
-                LogUtils.debug(`Invalid time range: ${taskData.time} - ${taskData.endTime}`);
+        // Google Calendar popup reminders are limited to four weeks.
+        if (taskData.reminder !== undefined) {
+            if (typeof taskData.reminder !== 'number' ||
+                taskData.reminder < 0 ||
+                taskData.reminder > 40320) {
+                LogUtils.debug(`Invalid reminder value: ${taskData.reminder}`);
                 return false;
             }
         }
 
-        // Validate reminder
-        if (taskData.reminder !== undefined) {
-            if (typeof taskData.reminder !== 'number' || taskData.reminder <= 0) {
-                LogUtils.debug(`Invalid reminder value: ${taskData.reminder}`);
-                return false;
-            }
+        if (taskData.durationMinutes !== undefined &&
+            (taskData.durationMinutes <= 0 || taskData.durationMinutes > 1440)) {
+            LogUtils.debug(`Invalid duration value: ${taskData.durationMinutes}`);
+            return false;
         }
 
         return true;
@@ -362,7 +380,7 @@ export class TaskParser {
         // Additional logging for task parser verbose mode
         if (result.changed && this.plugin.settings.verboseLogging) {
             if (result.changes?.title) {
-                LogUtils.debug(`Title changed: "${metadata?.title}" → "${task.title}"`);
+                LogUtils.debug(`Title changed for calendar item ${task.id}`);
             }
         }
 
@@ -424,7 +442,7 @@ export class TaskParser {
                         const offset = content.length + formattedTaskLine.length + 1;
                         this.plugin.tokenController.generateTaskId(view, offset);
                     }
-                    LogUtils.debug(`Created task: ${task.title}`);
+                    LogUtils.debug('Created imported calendar task');
                 } finally {
                     state.removeProcessingTask(lockKey);
                 }
@@ -496,8 +514,8 @@ export class TaskParser {
         let header = lines[0];
 
         // Remove task checkbox or informational-event prefix.
-        header = header.replace(/^- \[[xX ]\]\s*/, '');
-        header = header.replace(/^- 📆\s*/, '');
+        header = header.replace(/^\s*-\s+\[[xX ]\]\s*/, '');
+        header = header.replace(/^\s*-\s+📆\s*/, '');
 
         // Process date, time, and other markers with consistent spacing
         // This helps prevent data corruption and ensures consistent format
@@ -550,10 +568,6 @@ export class TaskParser {
     }
 
     private parseTaskData(line: string): ParsedTaskData {
-        if (this.plugin.settings.verboseLogging) {
-            LogUtils.debug(`Parsing task data from line: ${line}`);
-        }
-
         const dateMatch = line.match(this.DATE_PATTERN);
         const timeMatch = line.match(this.TIME_PATTERN);
         const endTimeMatch = line.match(this.END_TIME_PATTERN);
@@ -699,9 +713,11 @@ export class TaskParser {
     }
 
     public async getTaskById(taskId: string): Promise<Task | null> {
-        // First check the currently active file in the editor (handles unsaved changes)
+        // First check the currently active in-scope file in the editor
+        // (handles unsaved changes without allowing an out-of-scope editor to
+        // bypass the configured folder restriction).
         const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (activeFile instanceof TFile) {
+        if (activeFile instanceof TFile && this.isFileInScope(activeFile)) {
             const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
             if (activeView?.editor) {
                 try {
@@ -741,7 +757,7 @@ export class TaskParser {
                     }
                 }
             } catch (error) {
-                LogUtils.error(`Failed to get task ${taskId} from known file ${metadata.filePath}:`, error);
+                LogUtils.error(`Failed to get task ${taskId} from its known file:`, error);
                 // Fall back to full search below
             }
         }
@@ -775,6 +791,11 @@ export class TaskParser {
      * @returns Array of parsed tasks
      */
     public async parseTasksFromContent(content: string, filePath: string): Promise<Task[]> {
+        if (!this.isPathInScope(filePath)) {
+            LogUtils.debug(`File ${filePath} is outside the configured sync scope, skipping editor content`);
+            return [];
+        }
+
         const tasks: Task[] = [];
         const lines = content.split('\n');
         let currentTaskLine = '';

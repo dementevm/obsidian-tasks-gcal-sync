@@ -38,6 +38,7 @@ export class TokenController {
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
     private readonly fileRepairPromises = new Map<string, Promise<boolean>>()
     private readonly pendingDeletionTimers = new Map<string, number>()
+    private readonly pendingViewReconciliations = new WeakSet<EditorView>()
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -72,6 +73,37 @@ export class TokenController {
         if (idMatches.length === 0) return line
 
         const taskIdText = idMatches[0][0]
+
+        // Fast path: if the private ID is already directly after the task/event
+        // marker and every complete calendar-only token is already in the
+        // metadata prefix, leave the line byte-for-byte untouched. In
+        // particular, do not collapse spaces while the user is editing a title:
+        // replacing the whole line for cosmetic whitespace changes can move the
+        // CodeMirror cursor back to the start of the task.
+        if (idMatches.length === 1) {
+            const canonicalMatch = line.match(
+                /^(\s*-\s+(?:\[[ xX]\]|📆))\s+(<!-- task-id: [a-z0-9]+ -->)(.*)$/
+            )
+
+            if (canonicalMatch) {
+                let tail = canonicalMatch[3].trimStart()
+                const tokenAtStart =
+                    /^(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+                const tokenAnywhere =
+                    /(?:^|\s)(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+
+                while (true) {
+                    const prefixToken = tail.match(tokenAtStart)
+                    if (!prefixToken) break
+                    tail = tail.slice(prefixToken[0].length).trimStart()
+                }
+
+                if (!tokenAnywhere.test(tail)) {
+                    return line
+                }
+            }
+        }
+
         let withoutIds = line.replace(this.ID_PATTERN, '')
 
         const anchorMatch =
@@ -83,22 +115,34 @@ export class TokenController {
         let remainder = withoutIds.slice(anchorMatch[0].length).trim()
         remainder = remainder.replace(/[ \t]{2,}/g, ' ')
 
-        // Reminder is our own metadata. Keep it next to the private ID so the
-        // user-visible title and Obsidian Tasks metadata remain contiguous.
-        const reminderMatch = remainder.match(/🔔\s*(\d+)([mhd])/)
-        let reminderText = ''
-        if (reminderMatch) {
-            reminderText = reminderMatch[0]
-            remainder = remainder
-                .replace(reminderText, '')
-                .replace(/[ \t]{2,}/g, ' ')
-                .trim()
+        // Our calendar-only metadata is unknown to Obsidian Tasks. Keep all
+        // of it immediately after the private ID so the user-visible title and
+        // Tasks-owned metadata (recurrence, due date, done date, etc.) remain
+        // contiguous at the end of the line. Tasks parses its metadata from the
+        // end, so a trailing ⏰/➡️/⏱/🔔 token can otherwise hide recurrence.
+        const calendarMetadataPatterns = [
+            /⏰\s*\d{1,2}:\d{2}/,
+            /➡️\s*\d{1,2}:\d{2}/,
+            /⏱\s*\d+[mh]/,
+            /🔔\s*\d+[mhd]/
+        ]
+
+        const calendarMetadata: string[] = []
+        for (const pattern of calendarMetadataPatterns) {
+            const match = remainder.match(pattern)
+            if (!match) continue
+            calendarMetadata.push(match[0])
+            remainder = remainder.replace(match[0], ' ')
         }
+
+        remainder = remainder
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim()
 
         return [
             anchorMatch[1],
             taskIdText,
-            reminderText,
+            ...calendarMetadata,
             remainder
         ].filter(Boolean).join(' ')
     }
@@ -268,7 +312,17 @@ export class TokenController {
 
         if (changes.length === 0) return false
 
-        view.dispatch({ changes })
+        // A structural repair can replace a complete line. CodeMirror maps a
+        // cursor inside a replaced range to the left edge by default, which
+        // feels like the editor suddenly jumped to the beginning of the task.
+        // Preserve the current selection and prefer the right edge of changed
+        // ranges so normal typing never jumps back to the checkbox.
+        const changeSet = view.state.changes(changes)
+        const mappedSelection = view.state.selection.map(changeSet, 1)
+        view.dispatch({
+            changes: changeSet,
+            selection: mappedSelection
+        })
         return true
     }
 
@@ -361,6 +415,11 @@ export class TokenController {
         // Track edits and keep IDs in the Tasks-compatible position.
         this.plugin.registerEvent(
             this.plugin.app.workspace.on('editor-change', debounce((editor: Editor) => {
+                const file = this.plugin.app.workspace.getActiveFile()
+                if (!(file instanceof TFile) || !this.plugin.taskParser.isFileInScope(file)) {
+                    return
+                }
+
                 this.lastEditTime = Date.now()
                 this.ensureIdsAfterMarker(editor)
                 this.ensureUniqueTaskIds(editor)
@@ -600,7 +659,7 @@ export class TokenController {
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
             if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
-                LogUtils.debug(`Found new task at line ${i}: ${line.text}`)
+                LogUtils.debug(`Found new sync item at line ${i}`)
                 this.generateTaskId(view, line.from)
             }
         }
@@ -613,6 +672,27 @@ export class TokenController {
         this.normalizeTaskIdsInView(view)
     }
 
+    /**
+     * CodeMirror does not allow EditorView.dispatch() while ViewPlugin.update()
+     * is running. Defer hidden-ID normalization until the current update stack
+     * has completed, and coalesce nested updates caused by our own dispatches.
+     */
+    private scheduleViewReconciliation(view: EditorView): void {
+        if (this.pendingViewReconciliations.has(view)) return
+        this.pendingViewReconciliations.add(view)
+
+        window.setTimeout(() => {
+            try {
+                this.normalizeTaskIdsInView(view)
+                this.ensureUniqueTaskIdsInView(view)
+            } catch (error) {
+                LogUtils.error(`Deferred editor reconciliation failed: ${error}`)
+            } finally {
+                this.pendingViewReconciliations.delete(view)
+            }
+        }, 0)
+    }
+
     public getExtension(): Extension[] {
         const idPattern = this.ID_PATTERN;
         const plugin = this.plugin;
@@ -623,20 +703,15 @@ export class TokenController {
             private lastChangeTime = 0;
 
             constructor(view: EditorView) {
-                setTimeout(() => {
-                    controller.normalizeTaskIdsInView(view);
-                    controller.ensureUniqueTaskIdsInView(view);
-                }, 0);
+                controller.scheduleViewReconciliation(view);
             }
 
             update(update: ViewUpdate) {
                 if (!update.docChanged) return;
 
-                // Obsidian Tasks can create the next recurrence by copying the
-                // entire task line, including our hidden ID. Fix placement and
-                // atomically reassign copied IDs before auto-sync sees them.
-                if (controller.normalizeTaskIdsInView(update.view)) return;
-                if (controller.ensureUniqueTaskIdsInView(update.view)) return;
+                // Any operation that dispatches a follow-up transaction must
+                // happen after this ViewPlugin.update() callback has returned.
+                controller.scheduleViewReconciliation(update.view);
 
                 const currentTime = Date.now();
                 if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
@@ -655,69 +730,6 @@ export class TokenController {
                             controller.generateTaskId(update.view, line.from);
                         }
                         pos = line.to + 1;
-                    }
-                });
-            }
-        });
-
-        // Add task completion state change detector
-        const taskCompletionPlugin = ViewPlugin.fromClass(class {
-            private lastChangeTime = 0;
-
-            update(update: ViewUpdate) {
-                if (!update.docChanged) return;
-
-                const currentTime = Date.now();
-                if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
-                this.lastChangeTime = currentTime;
-
-                // Process changes to detect task toggling
-                update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-                    const oldDoc = update.startState.doc;
-                    const newDoc = update.state.doc;
-
-                    // Find the lines of the changes
-                    const oldStartLine = oldDoc.lineAt(fromA);
-                    const newStartLine = newDoc.lineAt(fromB);
-
-                    // Check if this might be a task checkbox toggle
-                    const oldLineText = oldStartLine.text;
-                    const newLineText = newStartLine.text;
-
-                    // Check if the line had an ID (to ensure we're dealing with our tracked tasks)
-                    const taskIdMatch = newLineText.match(/<!-- task-id: ([a-z0-9]+) -->/);
-                    if (!taskIdMatch) return;
-
-                    const taskId = taskIdMatch[1];
-
-                    // Check if this is a task being unticked (checkbox state changed from '[x]' to '[ ]')
-                    const wasChecked = oldLineText.match(/^\s*- \[[xX]\]/);
-                    const isNowUnchecked = newLineText.match(/^\s*- \[ \]/);
-
-                    if (wasChecked && isNowUnchecked) {
-                        LogUtils.debug(`Task ${taskId} was unticked - will remove completion markers`);
-
-                        // Look for completion markers on the line
-                        const hasCompletionMarkers = newLineText.match(controller.COMPLETION_PATTERN);
-
-                        if (hasCompletionMarkers) {
-                            LogUtils.debug(`Detected completion markers on unticked task ${taskId} - cleaning up`);
-
-                            // Remove all completion markers
-                            let cleanedLine = newLineText.replace(controller.COMPLETION_PATTERN, '');
-                            // Clean up extra whitespace
-                            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
-
-                            cleanedLine = controller.normalizeSyncItemLineForTasksCompatibility(cleanedLine);
-
-                            LogUtils.debug(`Original line: ${newLineText}`);
-                            LogUtils.debug(`Cleaned line: ${cleanedLine}`);
-
-                            // Apply the change
-                            update.view.dispatch({
-                                changes: [{ from: newStartLine.from, to: newStartLine.to, insert: cleanedLine }]
-                            });
-                        }
                     }
                 });
             }
@@ -865,17 +877,12 @@ export class TokenController {
                             const taskId = idMatch[1];
                             LogUtils.debug(`Task line deletion detected for task ${taskId}`);
 
-                            // Schedule task cleanup asynchronously with a short delay
-                            // to ensure the edit completes first
-                            setTimeout(() => {
-                                try {
-                                    const metadata = this.plugin.settings.taskMetadata[taskId];
-                                    this.plugin.handleTaskDeletion(taskId, metadata?.eventId)
-                                        .catch(error => LogUtils.error(`Error cleaning up deleted task ${taskId}: ${error}`));
-                                } catch (error) {
-                                    LogUtils.error(`Error scheduling task deletion for ${taskId}: ${error}`);
-                                }
-                            }, 100);
+                            // Defer remote deletion and verify the item did not
+                            // move to another in-scope file (cut/paste, rename, LiveSync).
+                            const metadata = this.plugin.settings.taskMetadata[taskId];
+                            if (metadata?.filePath) {
+                                this.scheduleMissingItemDeletion(taskId, metadata.filePath);
+                            }
                         }
                     }
                     return; // Always allow line deletions
@@ -972,16 +979,23 @@ export class TokenController {
 
                 const atOffset = prefix.length - match[0].length
                 const charBefore = atOffset > 0 ? prefix.charAt(atOffset - 1) : ''
-                if (charBefore && !/\s/.test(charBefore)) return
+                const beforeAt = prefix.slice(0, atOffset)
+                const followsCalendarMetadata =
+                    /(?:📅\s*\d{4}-\d{2}-\d{2}|⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])$/i
+                        .test(beforeAt)
+                if (charBefore && !/\s/.test(charBefore) && !followsCalendarMetadata) return
 
                 // @event is a line-type shortcut, not task metadata. Only expand
                 // it immediately after a plain list marker.
                 if (key === 'event' && prefix.slice(0, atOffset).trim() !== '-') return
 
+                const leadingSpace =
+                    charBefore && !/\s/.test(charBefore) ? ' ' : ''
+
                 replacements.push({
                     from: line.from + atOffset,
                     to: toB,
-                    insert: replacement
+                    insert: leadingSpace + replacement
                 })
             })
 
@@ -994,8 +1008,7 @@ export class TokenController {
             atomicRanges,
             preventDeletion,
             calendarShortcutExpander,
-            taskCreationPlugin,
-            taskCompletionPlugin
+            taskCreationPlugin
         ];
     }
 
@@ -1011,13 +1024,15 @@ export class TokenController {
             const now = Date.now();
             const line = view.state.doc.lineAt(pos);
             const file = this.plugin.app.workspace.getActiveFile();
-            if (!file) {
-                LogUtils.error('No active file found');
+            if (!(file instanceof TFile)) {
+                LogUtils.error('No active Markdown file found');
                 return '';
             }
-
-            LogUtils.debug('Generating ID for line:', line.text);
-
+            if (!this.plugin.taskParser.isFileInScope(file)) {
+                LogUtils.debug(`Skipping task ID generation outside sync scope: ${file.path}`);
+                return '';
+            }
+            LogUtils.debug('Generating ID for calendar-tracked line');
             // Check if line already has an ID
             if (line.text.match(this.ID_PATTERN)) {
                 LogUtils.debug('Line already has an ID');

@@ -353,8 +353,9 @@ export const store = createStore<TaskStore>()(
                                 // occurrences need to delete their old calendar event.
                                 if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                     const syncAge = Date.now() - metadata.syncTimestamp;
-                                    if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
-                                        LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping redundant enqueue`);
+                                    const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                    if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                        LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago and is unchanged; skipping redundant enqueue`);
                                         return;
                                     }
                                 }
@@ -375,7 +376,7 @@ export const store = createStore<TaskStore>()(
 
                                 // Always add to queue - we'll deduplicate later when processing
                                 // This ensures changes made during processing aren't missed
-                                LogUtils.debug(`Enqueueing task ${task.id} with title='${task.title}', reminder=${task.reminder}`);
+                                LogUtils.debug(`Enqueueing calendar item ${task.id}`);
                                 state.syncQueue.add(task.id);
                                 validTaskIds.push(task.id);
 
@@ -469,16 +470,27 @@ export const store = createStore<TaskStore>()(
                                     }
                                 }, TIMING.SYNC_QUEUE_CHECK_INTERVAL_MS);
 
-                                set(state => {
-                                    state.syncQueueCheckerId = intervalId as unknown as number;
+                                const checkerId = intervalId as unknown as number;
+                                const safetyTimeoutId = window.setTimeout(() => {
+                                    const checkerState = get();
 
-                                    // Safety cleanup after timeout to avoid lingering intervals
-                                    state.syncQueueCheckerTimeout = window.setTimeout(() => {
-                                        if (state.syncQueueCheckerId) {
-                                            clearInterval(state.syncQueueCheckerId);
-                                            state.syncQueueCheckerId = null;
-                                        }
-                                    }, TIMING.SYNC_QUEUE_SAFETY_TIMEOUT_MS) as unknown as number;
+                                    // Only clean up the checker this timeout was
+                                    // created for. A newer rapid edit may already
+                                    // have installed a replacement interval.
+                                    if (checkerState.syncQueueCheckerId === checkerId) {
+                                        clearInterval(intervalId);
+                                        set(state => {
+                                            if (state.syncQueueCheckerId === checkerId) {
+                                                state.syncQueueCheckerId = null;
+                                            }
+                                            state.syncQueueCheckerTimeout = null;
+                                        });
+                                    }
+                                }, TIMING.SYNC_QUEUE_SAFETY_TIMEOUT_MS) as unknown as number;
+
+                                set(state => {
+                                    state.syncQueueCheckerId = checkerId;
+                                    state.syncQueueCheckerTimeout = safetyTimeoutId;
                                 });
                             }
                         }, delay) as unknown as number;
@@ -573,7 +585,7 @@ export const store = createStore<TaskStore>()(
                                     }
                                 }
                             } catch (error) {
-                                LogUtils.error(`Failed to process file ${filePath}:`, error);
+                                LogUtils.error('Failed to process an in-scope Markdown file:', error);
                             }
                         }
 
@@ -606,11 +618,11 @@ export const store = createStore<TaskStore>()(
 
                             // Check if task was just synced
                             const metadata = state.plugin.settings.taskMetadata[task.id];
-                            if (metadata?.justSynced && metadata.syncTimestamp) {
+                            if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
-                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
-                                    LogUtils.debug(`Skipping task ${task.id} that was just synced ${syncAge}ms ago`);
-                                    // Also remove from queue since we're skipping it
+                                const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                    LogUtils.debug(`Skipping unchanged task ${task.id} that was just synced ${syncAge}ms ago`);
                                     state.removeFromSyncQueue(task.id);
                                     return false;
                                 }
@@ -636,10 +648,15 @@ export const store = createStore<TaskStore>()(
 
                             LogUtils.debug(`Batch progress: ${i + batch.length}/${actualTaskCount} (${succeeded} succeeded, ${failed} failed)`);
 
-                            // Remove processed tasks from queue
-                            for (const task of batch) {
-                                if (task.id) {
+                            // Remove successful tasks from the queue. Failed tasks stay
+                            // queued and are also recorded in failedSyncs for a later retry.
+                            for (let resultIndex = 0; resultIndex < batch.length; resultIndex++) {
+                                const task = batch[resultIndex];
+                                const result = results[resultIndex];
+                                if (!task.id) continue;
+                                if (result.status === 'fulfilled') {
                                     state.removeFromSyncQueue(task.id);
+                                    state.clearSyncFailure(task.id);
                                 }
                             }
 
@@ -656,14 +673,26 @@ export const store = createStore<TaskStore>()(
                             }
                         }
 
+                        const remainingFailures = get().failedSyncs.size;
+                        if (remainingFailures > 0) {
+                            throw new Error(`${remainingFailures} calendar item(s) failed to sync`);
+                        }
                         LogUtils.debug('✅ Full sync completed');
                     } catch (error) {
-                        LogUtils.error('Failed to process sync queue:', error);
+                        const syncError = error instanceof Error ? error : new Error(String(error));
+                        LogUtils.error('Failed to process sync queue:', syncError);
+                        set(state => {
+                            state.error = syncError;
+                            state.status = 'error';
+                        });
+                        throw syncError;
                     } finally {
                         set(state => {
                             state.processingBatch = false;
                             state.syncInProgress = false;
-                            state.status = 'connected';
+                            if (state.status !== 'error') {
+                                state.status = 'connected';
+                            }
                             state.lastSyncTime = Date.now();
                         });
                     }
@@ -1153,7 +1182,7 @@ export const store = createStore<TaskStore>()(
 
                         return content;
                     } catch (error) {
-                        LogUtils.error(`Failed to read file ${filePath}:`, error);
+                        LogUtils.error('Failed to read an in-scope Markdown file:', error);
                         throw error;
                     }
                 },
@@ -1184,7 +1213,7 @@ export const store = createStore<TaskStore>()(
                             });
                         });
                     } catch (error) {
-                        LogUtils.error(`Failed to update file cache for ${filePath}:`, error);
+                        LogUtils.error('Failed to update Markdown file cache:', error);
                     }
                 },
 
@@ -1253,7 +1282,7 @@ export const store = createStore<TaskStore>()(
                         // parsed fresh data from files, and editor handlers parse at the cursor line.
                         // Re-fetching here added 200ms+ of latency per task with no practical benefit
                         // since the debounce window already coalesces rapid edits.
-                        LogUtils.debug(`Syncing task ${task.id} with title='${task.title}', date=${task.date}, reminder=${task.reminder}`);
+                        LogUtils.debug(`Syncing calendar item ${task.id}`);
 
                         // Sync the task with calendar
                         await state.plugin.calendarSync?.syncTask(task);

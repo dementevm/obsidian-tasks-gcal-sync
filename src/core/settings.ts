@@ -67,6 +67,10 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.scanEntireVault)
                 .onChange(async (value) => {
                     this.plugin.settings.scanEntireVault = value;
+                    const state = useStore.getState();
+                    state.clearSyncQueue();
+                    state.clearTaskCache();
+                    state.clearFileCache();
                     await this.plugin.saveSettings();
                     this.display();
                 }));
@@ -83,12 +87,18 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                             .split('\n')
                             .map(folder => folder.trim())
                             .filter(folder => folder.length > 0);
+                        const state = useStore.getState();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
                         await this.plugin.saveSettings();
                     }));
         }
 
         // Calendar Settings Section
         containerEl.createEl('h3', { text: 'Calendar Settings' });
+
+        const originalCalendarId = this.plugin.settings.calendarId || '';
 
         new Setting(containerEl)
             .setName('Calendar ID')
@@ -105,17 +115,51 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                             'A dedicated calendar is safer. Continue?'
                         );
                         if (!confirmed) {
-                            this.plugin.settings.calendarId = '';
+                            this.plugin.settings.calendarId = originalCalendarId;
                             this.plugin.settings.primaryCalendarConfirmed = false;
                             await this.plugin.saveSettings();
                             this.display();
                             return;
                         }
                         this.plugin.settings.primaryCalendarConfirmed = true;
-                    } else if (nextId !== 'primary') {
-                        this.plugin.settings.primaryCalendarConfirmed = false;
                     }
+
+                    // Primary consent is device-local and persists once explicitly
+                    // granted. Existing tasks may remain bound to primary even after
+                    // the default Calendar ID is switched back to a dedicated calendar.
+                    const previousCalendarId = this.plugin.settings.calendarId.trim();
+                    const calendarChanged = nextId !== previousCalendarId;
+
+                    if (calendarChanged && previousCalendarId) {
+                        // Legacy metadata created before calendar ownership was
+                        // tracked belongs to the calendar that was active before
+                        // this setting changed. Stamp it before switching targets
+                        // so existing tasks never "migrate" implicitly.
+                        for (const metadata of Object.values(this.plugin.settings.taskMetadata)) {
+                            if (metadata.eventId && !metadata.calendarId) {
+                                metadata.calendarId = previousCalendarId;
+                            }
+                        }
+                    }
+
                     this.plugin.settings.calendarId = nextId;
+
+                    if (calendarChanged) {
+                        // Pending work belongs to the previous calendar target.
+                        // Do not let it execute after the target has changed.
+                        const state = useStore.getState();
+                        state.clearSyncTimeout();
+                        state.clearSyncQueueCheckers();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
+                        useStore.setState({
+                            failedSyncs: new Map(),
+                            error: null,
+                            status: state.authenticated ? 'connected' : 'disconnected'
+                        });
+                    }
+
                     await this.plugin.saveSettings();
                 }));
 
@@ -295,7 +339,7 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('OAuth Client Secret')
-            .setDesc('Select or create a SecretStorage entry containing the client secret. Obsidian stores the value locally for this vault.')
+            .setDesc('Select or create a SecretStorage entry. Secret ID is only a local name (for example: tasks-gcal-sync-client-secret); put the Google OAuth Client Secret itself in the secret value.')
             .addComponent(el => new SecretComponent(this.app, el)
                 .setValue(this.plugin.settings.clientSecretName || '')
                 .onChange(async (value) => {
@@ -304,15 +348,8 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('OAuth Redirect Bridge URL')
-            .setDesc('HTTPS URL of the static OAuth bridge. It must exactly match an Authorized redirect URI in your Google Cloud OAuth client.')
-            .addText(text => text
-                .setPlaceholder('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/')
-                .setValue(this.plugin.settings.oauthRedirectUri || '')
-                .onChange(async (value) => {
-                    this.plugin.settings.oauthRedirectUri = value.trim();
-                    await this.plugin.saveSettings();
-                }));
+            .setName('OAuth Redirect Bridge')
+            .setDesc('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/ — fixed by the public plugin for security. Register this exact URL as an Authorized redirect URI in Google Cloud.');
 
         const authNote = containerEl.createEl('div', { cls: 'setting-item-description' });
         authNote.style.marginTop = '0.75em';
