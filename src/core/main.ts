@@ -919,7 +919,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
         menu.addItem((item: MenuItem) => {
             item
-                .setTitle("Disconnect Google Calendar")
+                .setTitle("Disconnect Google Calendar on this device")
                 .setIcon("log-out")
                 .onClick(() => this.disconnectGoogle());
         });
@@ -1097,11 +1097,14 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
     private async disconnectGoogle() {
         try {
-            if (this.authManager?.isAuthenticated()) {
-                await this.authManager.revokeAccess();
+            if (this.authManager) {
+                // Device-local disconnect only. Revoking the Google OAuth grant
+                // would also invalidate credentials used by the user's other
+                // Obsidian devices.
+                await this.authManager.clearLocalAuthentication();
             }
 
-            // Clear tokens in settings
+            // Clear legacy tokens in settings
             if (this.settings.oauth2Tokens) {
                 this.settings.oauth2Tokens = undefined;
                 await this.saveSettings();
