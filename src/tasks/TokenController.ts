@@ -312,7 +312,17 @@ export class TokenController {
 
         if (changes.length === 0) return false
 
-        view.dispatch({ changes })
+        // A structural repair can replace a complete line. CodeMirror maps a
+        // cursor inside a replaced range to the left edge by default, which
+        // feels like the editor suddenly jumped to the beginning of the task.
+        // Preserve the current selection and prefer the right edge of changed
+        // ranges so normal typing never jumps back to the checkbox.
+        const changeSet = view.state.changes(changes)
+        const mappedSelection = view.state.selection.map(changeSet, 1)
+        view.dispatch({
+            changes: changeSet,
+            selection: mappedSelection
+        })
         return true
     }
 
