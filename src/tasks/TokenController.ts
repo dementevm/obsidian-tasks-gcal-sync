@@ -677,66 +677,6 @@ export class TokenController {
             }
         });
 
-        // Add task completion state change detector
-        const taskCompletionPlugin = ViewPlugin.fromClass(class {
-            private lastChangeTime = 0;
-
-            update(update: ViewUpdate) {
-                if (!update.docChanged) return;
-
-                const currentTime = Date.now();
-                if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
-                this.lastChangeTime = currentTime;
-
-                // Process changes to detect task toggling
-                update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-                    const oldDoc = update.startState.doc;
-                    const newDoc = update.state.doc;
-
-                    // Find the lines of the changes
-                    const oldStartLine = oldDoc.lineAt(fromA);
-                    const newStartLine = newDoc.lineAt(fromB);
-
-                    // Check if this might be a task checkbox toggle
-                    const oldLineText = oldStartLine.text;
-                    const newLineText = newStartLine.text;
-
-                    // Check if the line had an ID (to ensure we're dealing with our tracked tasks)
-                    const taskIdMatch = newLineText.match(/<!-- task-id: ([a-z0-9]+) -->/);
-                    if (!taskIdMatch) return;
-
-                    const taskId = taskIdMatch[1];
-
-                    // Check if this is a task being unticked (checkbox state changed from '[x]' to '[ ]')
-                    const wasChecked = oldLineText.match(/^\s*- \[[xX]\]/);
-                    const isNowUnchecked = newLineText.match(/^\s*- \[ \]/);
-
-                    if (wasChecked && isNowUnchecked) {
-                        LogUtils.debug(`Task ${taskId} was unticked - will remove completion markers`);
-
-                        // Look for completion markers on the line
-                        const hasCompletionMarkers = newLineText.match(controller.COMPLETION_PATTERN);
-
-                        if (hasCompletionMarkers) {
-                            LogUtils.debug(`Detected completion markers on unticked task ${taskId} - cleaning up`);
-
-                            // Remove all completion markers
-                            let cleanedLine = newLineText.replace(controller.COMPLETION_PATTERN, '');
-                            // Clean up extra whitespace
-                            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
-
-                            cleanedLine = controller.normalizeSyncItemLineForTasksCompatibility(cleanedLine);
-
-                            // Apply the change
-                            update.view.dispatch({
-                                changes: [{ from: newStartLine.from, to: newStartLine.to, insert: cleanedLine }]
-                            });
-                        }
-                    }
-                });
-            }
-        });
-
         const taskIdField = StateField.define<DecorationSet>({
             create() {
                 return Decoration.none
