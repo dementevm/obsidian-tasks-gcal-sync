@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     defaultTimedTaskReminderMinutes: 30,
     defaultInformationalEventReminderMinutes: 0,
     allDayTaskRemindersEnabled: false,
+    defaultAllDayTaskReminderMinutes: 0,
     defaultEventDurationMinutes: 5,
     defaultMorningEventTime: '09:00',
     includeFolders: [],
@@ -154,7 +155,24 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.allDayTaskRemindersEnabled = value;
                     await this.plugin.saveSettings();
+                    this.display();
                 }));
+
+        if (this.plugin.settings.allDayTaskRemindersEnabled) {
+            new Setting(containerEl)
+                .setName('All-day Reminder Offset')
+                .setDesc('Minutes before midnight at the start of the all-day event. 0 means midnight. For a morning reminder, add an explicit ⏰ time instead.')
+                .addText(text => text
+                    .setPlaceholder('0')
+                    .setValue(this.plugin.settings.defaultAllDayTaskReminderMinutes.toString())
+                    .onChange(async (value) => {
+                        const reminder = parseInt(value);
+                        if (!isNaN(reminder) && reminder >= 0) {
+                            this.plugin.settings.defaultAllDayTaskReminderMinutes = reminder;
+                            await this.plugin.saveSettings();
+                        }
+                    }));
+        }
 
         new Setting(containerEl)
             .setName('Default Event Duration')
