@@ -208,6 +208,7 @@ export class CalendarSync {
                 const updatedMetadata = {
                     ...metadata,
                     eventId,
+                    calendarId: this.plugin.settings.calendarId.trim(),
                     title: task.title,
                     date: task.date,
                     time: task.time,
@@ -290,7 +291,8 @@ export class CalendarSync {
 
             // Check metadata first
             const metadata = this.plugin.settings.taskMetadata[taskId];
-            if (metadata?.eventId) {
+            const currentCalendarId = this.plugin.settings.calendarId.trim();
+            if (metadata?.eventId && metadata.calendarId === currentCalendarId) {
                 // If we have metadata, find that specific event
                 const metadataEvent = taskEvents.find(e => e.id === metadata.eventId);
                 if (metadataEvent) {
@@ -357,7 +359,12 @@ export class CalendarSync {
                 // The events cache can be stale (up to 10s), which causes duplicates
                 // when multiple syncs fire in quick succession. The metadata is always
                 // up-to-date because we write it synchronously after each API call.
-                if (metadata?.eventId && !task.completed) {
+                const currentCalendarId = this.plugin.settings.calendarId.trim();
+                const metadataMatchesCalendar =
+                    metadata?.eventId &&
+                    metadata.calendarId === currentCalendarId;
+
+                if (metadataMatchesCalendar && !task.completed) {
                     try {
                         const event = this.createEventFromTask(task);
                         await this.makeRequest(this.getCalendarEventsEndpoint(metadata.eventId), 'PUT', event);
@@ -480,6 +487,7 @@ export class CalendarSync {
         const metadata = {
             filePath: task.filePath || existingMetadata?.filePath || '',
             eventId: eventId,
+            calendarId: this.plugin.settings.calendarId.trim(),
             title: task.title,
             date: task.date,
             time: task.time,
@@ -725,7 +733,8 @@ export class CalendarSync {
         const { timeMin, timeMax, forceFresh = false } = options ?? {};
         try {
             // Generate a cache key based on the time parameters
-            const cacheKey = `events-${timeMin || 'none'}-${timeMax || 'none'}`;
+            const calendarId = this.plugin.settings.calendarId.trim();
+            const cacheKey = `events-${calendarId}-${timeMin || 'none'}-${timeMax || 'none'}`;
 
             // Check cache first, unless forced to get fresh data
             if (!forceFresh &&
