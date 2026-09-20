@@ -201,7 +201,11 @@ export class TaskParser {
 
     public isTaskLine(line: string): boolean {
         const normalized = line.trim();
-        return this.TASK_PATTERN.test(normalized) || this.EVENT_PATTERN.test(normalized);
+        const isTaskOrEvent = this.TASK_PATTERN.test(normalized) || this.EVENT_PATTERN.test(normalized);
+
+        // Calendar sync is opt-in via the 📅 date marker. Plain checklists such as
+        // shopping lists remain ordinary Markdown/Tasks items and are ignored.
+        return isTaskOrEvent && this.DATE_PATTERN.test(normalized);
     }
 
     public async parseTask(line: string, filePath?: string): Promise<Task | null> {
