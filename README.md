@@ -276,6 +276,8 @@ The redirect bridge is public and auditable:
 - no storage of calendar/vault data;
 - it removes Google's authorization response from the browser address bar before returning to Obsidian.
 
+The bridge application itself does not persist the authorization response. As with any HTTPS host, GitHub Pages/GitHub infrastructure may process ordinary request metadata according to GitHub's own policies.
+
 The plugin communicates with:
 
 - `accounts.google.com` — OAuth authorization;
@@ -432,6 +434,13 @@ This project is a modified derivative of **Sasoon/obsidian-gcal-sync**, original
 The derivative work contains substantial modifications made in 2026. See [NOTICE](NOTICE) for attribution and a summary of the major changes.
 
 This project is distributed under **GPL-3.0**. See [LICENSE](LICENSE).
+
+## Official references
+
+- [Google OAuth 2.0](https://developers.google.com/identity/protocols/oauth2)
+- [Google Calendar API scopes](https://developers.google.com/workspace/calendar/api/auth)
+- [Obsidian SecretStorage guide](https://docs.obsidian.md/plugins/guides/secret-storage)
+- [Obsidian Community plugin developer policies](https://docs.obsidian.md/community-directory/developer-policies)
 
 ## Issues and contributions
 
