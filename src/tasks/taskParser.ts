@@ -113,6 +113,13 @@ export class TaskParser {
         try {
             const state = useStore.getState();
 
+            // Always repair copied recurring IDs before parsing. This makes
+            // parseTasksFromFile safe for Reading mode, queue re-fetches,
+            // manual sync and full-vault sync alike.
+            if (this.plugin.tokenController) {
+                await this.plugin.tokenController.repairTaskIdsInFile(file);
+            }
+
             // Invalidate cache before reading to ensure fresh content
             state.invalidateFileCache(file.path);
 
