@@ -48,6 +48,7 @@ export class TokenController {
         this.plugin.registerEvent(
             this.plugin.app.workspace.on('editor-change', debounce((editor: Editor) => {
                 this.lastEditTime = Date.now()
+                this.ensureUniqueTaskIds(editor)
                 this.ensureIdsAtEndOfLines(editor)
                 this.checkForNewTasks(editor)
                 this.handleTaskCompletionChanges(editor)
@@ -200,6 +201,56 @@ export class TokenController {
         // remain completely untouched by this plugin.
         const isTaskOrEvent = /^\s*-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
         return isTaskOrEvent && /📅\s*\d{4}-\d{2}-\d{2}/.test(line);
+    }
+
+    private ensureUniqueTaskIds(editor: Editor): void {
+        // Tasks recurrence and some external edits can duplicate the hidden ID.
+        // Keep the ID on the completed occurrence when possible; strip it from
+        // the next active occurrence so checkForNewTasks() assigns a fresh ID.
+        // This keeps each recurrence instance as a separate Google event.
+        // @ts-ignore - cm exists on editor but is not typed
+        const view = editor.cm as EditorView
+        if (!view) return
+
+        const groups = new Map<string, Array<{ line: any; completed: boolean; match: RegExpMatchArray }>>()
+        for (let i = 1; i <= view.state.doc.lines; i++) {
+            const line = view.state.doc.line(i)
+            const match = line.text.match(/<!-- task-id: ([a-z0-9]+) -->/)
+            if (!match) continue
+            const entries = groups.get(match[1]) || []
+            entries.push({
+                line,
+                completed: /^\s*-\s+\[[xX]\]/.test(line.text),
+                match
+            })
+            groups.set(match[1], entries)
+        }
+
+        const changes: { from: number; to: number; insert: string }[] = []
+        for (const entries of groups.values()) {
+            if (entries.length < 2) continue
+            const keeper = entries.find(entry => entry.completed) || entries[0]
+
+            for (const entry of entries) {
+                if (entry === keeper) continue
+                const marker = entry.match[0]
+                const index = entry.line.text.indexOf(marker)
+                if (index < 0) continue
+                const before = entry.line.text.slice(0, index)
+                const removeLeadingSpace = before.endsWith(' ') ? 1 : 0
+                changes.push({
+                    from: entry.line.from + index - removeLeadingSpace,
+                    to: entry.line.from + index + marker.length,
+                    insert: ''
+                })
+            }
+        }
+
+        if (changes.length > 0) {
+            changes.sort((a, b) => a.from - b.from)
+            view.dispatch({ changes })
+            LogUtils.debug(`Removed ${changes.length} duplicated task IDs; fresh IDs will be generated`)
+        }
     }
 
     private checkForNewTasks(editor: Editor) {
