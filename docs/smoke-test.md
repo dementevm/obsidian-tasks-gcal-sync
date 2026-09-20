@@ -140,6 +140,17 @@ Then:
 - [x] Verify normal plugin load/unload does not run generic orphan cleanup.
 - [x] Perform final Calendar audit: no new duplicate/orphan smoke events and no ordinary Google events were modified unexpectedly.
 
+## 15. Repository freshness regression
+
+After modernizing TypeScript/build configuration and removing legacy CSS/ID helpers:
+
+- [x] Create a new tracked task and verify its hidden task ID is not visually rendered.
+- [x] Edit title/time from desktop and verify the same Google event is updated without duplication.
+- [x] Verify ordinary/nested checklists retain normal Obsidian layout after removal of legacy global task CSS.
+- [x] Complete a recurring task from Reading mode and verify fresh occurrence ID/no duplicate Calendar event.
+- [x] Create/edit a task on iOS and verify Web Crypto/static imports work without ID-generation errors.
+- [x] Verify the iOS-created task can subsequently be edited from desktop and updates the same Calendar event.
+
 ## Release gate
 
 A release candidate is ready for merge/tagging when:
@@ -147,6 +158,6 @@ A release candidate is ready for merge/tagging when:
 - [x] the full functional smoke test above passes;
 - [x] `npm audit` is clean;
 - [x] clean `npm ci && npm run build` succeeds locally;
-- [ ] GitHub Build workflow is green on the release-preparation commit;
-- [ ] release version metadata is bumped consistently before tagging;
+- [x] GitHub Build workflow is green on the release-preparation/final main commit;
+- [x] release version metadata is bumped consistently before tagging;
 - [ ] the tag exactly matches `manifest.json.version`.
