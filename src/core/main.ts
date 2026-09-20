@@ -15,6 +15,9 @@ import { LogUtils } from '../utils/logUtils';
 import { hasTaskChanged } from '../utils/taskUtils';
 import { initializeStore } from './store';
 import { Platform } from 'obsidian';
+import { ReminderModal } from '../ui/ReminderModal';
+import { DiagnosticsModal } from '../ui/DiagnosticsModal';
+import { applyShareableSetup, createSetupLink, decodeSetup } from '../utils/setupTransfer';
 
 export default class GoogleCalendarSyncPlugin extends Plugin {
     settings: GoogleCalendarSettings;
@@ -108,6 +111,33 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 }
             });
 
+            this.registerObsidianProtocolHandler('tasks-gcal-sync/setup', async (params) => {
+                try {
+                    if (!params.data) throw new Error('Setup link is missing configuration data.');
+                    const setup = decodeSetup(params.data);
+                    const scope = setup.scanEntireVault
+                        ? 'Entire vault'
+                        : (setup.includeFolders.join(', ') || 'No folders');
+
+                    const confirmed = window.confirm(
+                        'Import Google Calendar Sync settings?\n\n' +
+                        `Calendar: ${setup.calendarId || 'not configured'}\n` +
+                        `Scope: ${scope}\n\n` +
+                        'OAuth secrets and refresh tokens are NOT contained in this link. ' +
+                        'Auto-sync will remain OFF after import.'
+                    );
+                    if (!confirmed) return;
+
+                    this.settings = applyShareableSetup(this.settings, setup);
+                    useStore.getState().setSyncEnabled(false);
+                    await this.saveSettings();
+                    new Notice('Calendar sync settings imported. Configure this device\'s SecretStorage and reconnect Google if needed.', 10000);
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    new Notice(`Failed to import setup link: ${message}`, 10000);
+                }
+            });
+
             try {
                 await this.authManager.loadSavedTokens();
             } catch (e) {
@@ -198,6 +228,27 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // Calendar metadata autocomplete: @event, @time, @rem, @dur, etc.
             this.registerEditorSuggest(new CalendarTokenSuggest(this.app));
 
+            this.addCommand({
+                id: 'create-calendar-reminder',
+                name: 'Create calendar reminder',
+                editorCallback: (editor) => new ReminderModal(this.app, this, editor).open()
+            });
+            this.addCommand({
+                id: 'google-calendar-sync-now',
+                name: 'Google Calendar: Sync now',
+                callback: () => { void this.syncNow(); }
+            });
+            this.addCommand({
+                id: 'google-calendar-diagnostics',
+                name: 'Google Calendar: Open diagnostics',
+                callback: () => new DiagnosticsModal(this.app, this).open()
+            });
+            this.addCommand({
+                id: 'google-calendar-copy-setup-link',
+                name: 'Google Calendar: Copy setup link',
+                callback: () => { void this.copySetupLink(); }
+            });
+
             // Initialize UI state
             this.updateRibbonStatus(useStore.getState().status);
 
@@ -240,6 +291,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 debounce(async (file: TFile) => {
                     if (!useStore.getState().isSyncAllowed()) return;
                     if (!file.path.endsWith('.md')) return;
+                    if (!this.taskParser.isFileInScope(file)) return;
 
                     try {
                         // Get the file content
@@ -436,7 +488,11 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         }
     }
 
-    public async handleTaskDeletion(taskId: string, eventId: string | undefined) {
+    public async handleTaskDeletion(
+        taskId: string,
+        eventId: string | undefined,
+        force = false
+    ): Promise<void> {
         const { isTaskLocked, isSyncEnabled, addProcessingTask, removeProcessingTask } = useStore.getState();
 
         if (isTaskLocked(taskId)) {
@@ -444,27 +500,29 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             return;
         }
 
-        // Skip deletion handling if sync is disabled
-        if (!isSyncEnabled()) {
-            LogUtils.debug(`🔒 Sync is disabled, skipping deletion handling for ${taskId}`);
+        if (!force && !isSyncEnabled()) {
+            LogUtils.debug(`🔒 Sync is disabled, deferring deletion handling for ${taskId}`);
             return;
         }
 
         try {
             addProcessingTask(taskId);
             if (eventId) {
-                LogUtils.debug(`Deleting calendar event: ${eventId}`);
-                try {
-                    await this.calendarSync?.deleteEvent(eventId);
-                    LogUtils.debug(`Successfully deleted event: ${eventId}`);
-                } catch (deleteError) {
-                    // Log but continue — still clean up metadata even if calendar deletion fails
-                    // (event may already be deleted, or API may be temporarily unavailable)
-                    LogUtils.error(`Failed to delete calendar event ${eventId}:`, deleteError);
+                if (!this.calendarSync) {
+                    throw new Error('Calendar sync is not initialized; keeping metadata for retry.');
                 }
+                LogUtils.debug(`Deleting calendar event: ${eventId}`);
+                await this.calendarSync.deleteEvent(eventId);
+                LogUtils.debug(`Successfully deleted event: ${eventId}`);
             }
+
+            // Metadata is removed only after the remote delete succeeds (or when
+            // there was no remote event). This keeps failed deletes retryable.
             await this.metadataManager?.removeTaskMetadata(taskId);
             LogUtils.debug('Cleaned up task metadata');
+        } catch (error) {
+            LogUtils.error(`Failed to delete calendar item for ${taskId}; metadata retained:`, error);
+            throw error;
         } finally {
             removeProcessingTask(taskId);
         }
@@ -762,13 +820,33 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
         menu.addItem((item: MenuItem) => {
             item
-                .setTitle("Repair Calendar Sync")
-                .setIcon("tool")
+                .setTitle('Diagnostics')
+                .setIcon('activity')
+                .onClick(() => new DiagnosticsModal(this.app, this).open());
+        });
+
+        menu.addItem((item: MenuItem) => {
+            item
+                .setTitle('Clean Orphaned Calendar Items…')
+                .setIcon('trash-2')
+                .onClick(() => { void this.cleanupOrphansWithConfirmation(); });
+        });
+
+        menu.addItem((item: MenuItem) => {
+            item
+                .setTitle('Repair Calendar Sync…')
+                .setIcon('tool')
                 .onClick(async () => {
                     if (!this.repairManager) {
                         new Notice('Repair manager not initialized');
                         return;
                     }
+                    const confirmed = window.confirm(
+                        'Repair may update, create, deduplicate, and delete Obsidian-managed calendar events. ' +
+                        'It is not run automatically. Continue?'
+                    );
+                    if (!confirmed) return;
+
                     try {
                         new Notice('Starting repair process...');
                         await this.repairManager.repairSyncState(
@@ -777,7 +855,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                         new Notice('Repair completed successfully');
                     } catch (error) {
                         console.error('Repair failed:', error);
-                        new Notice('Repair failed. Check console for details.');
+                        new Notice('Repair failed. Check diagnostics/console for details.');
                     }
                 });
         });
@@ -808,7 +886,12 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         }
 
         try {
+            this.validateSyncConfiguration();
             state.enableTempSync();
+
+            // Explicit removals from existing files are safe to process here.
+            // Generic orphan cleanup is intentionally NOT part of Sync Now.
+            await this.cleanupExplicitlyRemovedItems();
 
             // Manual Sync Now is an explicit force-sync. Clear transient anti-duplicate
             // markers and caches so a rapid second edit is never ignored.
@@ -822,24 +905,6 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // processSyncQueue() owns syncInProgress and will set/reset it atomically.
             const tasks = await this.taskParser?.getAllTasks() || [];
             console.log(`Found ${tasks.length} tasks to sync`);
-
-            // Get all Obsidian events from calendar
-            const allTaskIds = new Set(tasks.map(t => t.id));
-            const calendarEvents = await this.calendarSync?.findAllObsidianEvents() || [];
-            console.log(`Found ${calendarEvents.length} Obsidian events in calendar`);
-
-            // Clean up orphaned events and metadata
-            if (this.repairManager) {
-                await this.repairManager.deleteOrphanedEvents(
-                    calendarEvents,
-                    allTaskIds,
-                    (progress) => console.log(`Cleanup progress: ${progress.phase} - ${progress.processedItems}/${progress.totalItems}`)
-                );
-                await this.repairManager.cleanupOrphanedMetadata(
-                    allTaskIds,
-                    (progress) => console.log(`Cleanup progress: ${progress.phase} - ${progress.processedItems}/${progress.totalItems}`)
-                );
-            }
 
             // Enqueue all tasks and process immediately
             await state.enqueueTasks(tasks);
@@ -857,6 +922,118 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             new Notice(`Sync failed: ${syncError.message}`, 10000);
         } finally {
             state.disableTempSync();
+        }
+    }
+
+    public async syncNow(): Promise<void> {
+        await this.syncAllTasks();
+    }
+
+    public async testCalendarConnection(): Promise<void> {
+        this.validateSyncConfiguration();
+        if (!this.calendarSync) throw new Error('Calendar sync is not initialized.');
+        await this.calendarSync.testConnection();
+    }
+
+    public getSetupLink(): string {
+        return createSetupLink(this.settings);
+    }
+
+    public async copySetupLink(): Promise<void> {
+        const link = this.getSetupLink();
+        await navigator.clipboard.writeText(link);
+        new Notice('Secret-free setup link copied.');
+    }
+
+    public async cleanupOrphansWithConfirmation(): Promise<void> {
+        if (!this.repairManager) throw new Error('Repair manager not initialized.');
+        const preview = await this.repairManager.previewOrphanCleanup();
+
+        if (preview.orphanEvents === 0 &&
+            preview.orphanMetadata === 0 &&
+            preview.duplicateEvents === 0) {
+            new Notice('No orphaned or duplicate calendar items found.');
+            return;
+        }
+
+        const scope = this.settings.scanEntireVault
+            ? 'entire vault'
+            : this.settings.includeFolders.join(', ');
+
+        const confirmed = window.confirm(
+            'Clean Obsidian-managed orphaned calendar items?\n\n' +
+            `Scope: ${scope || 'none'}\n` +
+            `Active items: ${preview.activeItems}\n` +
+            `Orphan calendar events: ${preview.orphanEvents}\n` +
+            `Orphan metadata records: ${preview.orphanMetadata}\n` +
+            `Duplicate events: ${preview.duplicateEvents}\n\n` +
+            'This is destructive and is never run automatically.'
+        );
+        if (!confirmed) return;
+
+        await this.repairManager.cleanupOrphansExplicitly();
+        new Notice('Orphan cleanup completed.');
+    }
+
+    private validateSyncConfiguration(): void {
+        const calendarId = this.settings.calendarId?.trim();
+        if (!calendarId) {
+            throw new Error('Calendar ID is not configured.');
+        }
+        if (calendarId === 'primary' && !this.settings.primaryCalendarConfirmed) {
+            throw new Error('Primary calendar must be explicitly confirmed in settings.');
+        }
+        if (!this.settings.scanEntireVault) {
+            if (!this.settings.includeFolders.length) {
+                throw new Error('Choose folders to sync or explicitly enable Scan Entire Vault.');
+            }
+            if (this.taskParser.getFilteredFiles().length === 0) {
+                throw new Error('No configured sync folders/files were found.');
+            }
+        }
+    }
+
+    private async cleanupExplicitlyRemovedItems(): Promise<void> {
+        const scopedFiles = this.taskParser.getFilteredFiles();
+        const itemLocations = new Map<string, { file: TFile; line: string }>();
+
+        for (const file of scopedFiles) {
+            const content = await this.app.vault.read(file);
+            for (const line of content.split('\n')) {
+                const idMatch = line.match(/<!-- task-id: ([a-z0-9]+) -->/);
+                if (idMatch) itemLocations.set(idMatch[1], { file, line });
+            }
+        }
+
+        for (const [taskId, metadata] of Object.entries(this.settings.taskMetadata)) {
+            const location = itemLocations.get(taskId);
+
+            if (location) {
+                // The item still exists but lost 📅: explicit opt-out.
+                if (!this.taskParser.isTaskLine(location.line)) {
+                    await this.handleTaskDeletion(taskId, metadata.eventId, true);
+                    const content = await this.app.vault.read(location.file);
+                    const cleaned = content.replace(
+                        new RegExp(`\\s*<!-- task-id: ${taskId} -->`, 'g'),
+                        ''
+                    );
+                    if (cleaned !== content) {
+                        await this.app.vault.modify(location.file, cleaned);
+                    }
+                }
+                continue;
+            }
+
+            // If the old file still exists and the ID is nowhere in the configured
+            // scope, a manual Sync Now treats this as an explicit line deletion.
+            // If the old file vanished/was renamed, keep metadata for manual orphan
+            // review instead of guessing.
+            if (metadata.filePath) {
+                const originalFile = this.app.vault.getAbstractFileByPath(metadata.filePath);
+                if (originalFile instanceof TFile) {
+                    await this.handleTaskDeletion(taskId, metadata.eventId, true);
+                }
+            }
         }
     }
 
