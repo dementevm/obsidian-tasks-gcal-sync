@@ -86,6 +86,7 @@ export interface GoogleCalendarSettings {
     defaultTimedTaskReminderMinutes: number;
     defaultInformationalEventReminderMinutes: number;
     allDayTaskRemindersEnabled: boolean;
+    defaultAllDayTaskReminderMinutes: number;
     defaultEventDurationMinutes: number;
     defaultMorningEventTime: string;
     includeFolders: string[];
