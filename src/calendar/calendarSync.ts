@@ -158,7 +158,6 @@ export class CalendarSync {
     public async deleteEvent(eventId: string, taskId?: string): Promise<void> {
         const operation = async () => {
             try {
-                await this.checkRateLimit();
                 await this.makeRequest(this.getCalendarEventsEndpoint(eventId), 'DELETE');
                 LogUtils.debug(`Successfully deleted event: ${eventId}`);
             } catch (error) {
@@ -580,19 +579,13 @@ export class CalendarSync {
     /**
      * Execute a request with timeout using Promise.race
      */
+    /**
+     * requestUrl does not expose an AbortSignal. A synthetic Promise.race
+     * timeout would reject while the HTTP request kept running, which is unsafe
+     * for event creation because a retry could create a duplicate.
+     */
     private async requestWithTimeout(options: Parameters<typeof requestUrl>[0]): Promise<any> {
-        const timeoutMs = TIMING.REQUEST_TIMEOUT_MS;
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Request timeout after ${timeoutMs}ms`));
-            }, timeoutMs);
-        });
-
-        return Promise.race([
-            requestUrl(options),
-            timeoutPromise
-        ]);
+        return requestUrl(options);
     }
 
     private async makeRequest(endpoint: string, method: string, params?: any): Promise<any> {
@@ -684,8 +677,15 @@ export class CalendarSync {
                         return true;
                     }
                     const status = (error as any).status;
-                    // Retry on server errors and rate limiting, but not client errors
-                    return !status || status >= 500 || status === 429;
+                    if (status === 429) return true;
+
+                    // POST is not idempotent. If Google accepted the request but
+                    // the response was lost, blindly retrying can create a duplicate.
+                    // The next sync will reconcile by the private task ID instead.
+                    if (method === 'POST') return false;
+
+                    // GET is read-only; PUT/DELETE target a concrete event ID.
+                    return !status || status >= 500;
                 }
                 return true;
             }
@@ -759,8 +759,18 @@ export class CalendarSync {
             if (timeMin) params.timeMin = timeMin;
             if (timeMax) params.timeMax = timeMax;
 
-            const response = await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET', params);
-            const events = response.items || [];
+            const events: GoogleCalendarEvent[] = [];
+            let pageToken: string | undefined;
+
+            do {
+                const response = await this.makeRequest(
+                    this.getCalendarEventsEndpoint(),
+                    'GET',
+                    pageToken ? { ...params, pageToken } : params
+                );
+                events.push(...(response.items || []));
+                pageToken = response.nextPageToken;
+            } while (pageToken);
 
             // Update cache with detailed logging
             this.eventsCache = {
@@ -955,7 +965,6 @@ export class CalendarSync {
 
     public async listEvents(): Promise<GoogleCalendarEvent[]> {
         try {
-            await this.checkRateLimit();
             const response = await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET');
             return response.items || [];
         } catch (error) {
