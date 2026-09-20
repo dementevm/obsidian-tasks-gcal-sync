@@ -36,6 +36,7 @@ export class TokenController {
     private modifyLock = false
     private readonly ID_PATTERN = /<!-- task-id: ([a-z0-9]+) -->/g
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
+    private readonly fileRepairPromises = new Map<string, Promise<boolean>>()
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -99,6 +100,123 @@ export class TokenController {
             reminderText,
             remainder
         ].filter(Boolean).join(' ')
+    }
+
+    public repairSyncContentForRecurringTasks(content: string): {
+        content: string
+        changed: boolean
+        reassigned: number
+    } {
+        if (!content.includes('<!-- task-id:')) {
+            return { content, changed: false, reassigned: 0 }
+        }
+
+        const lines = content.split('\n')
+        let changed = false
+        let reassigned = 0
+
+        // First normalize hidden-ID placement so Obsidian Tasks can parse all
+        // recurrence/date metadata regardless of editor mode.
+        for (let i = 0; i < lines.length; i++) {
+            if (!this.isSyncItemLine(lines[i]) ||
+                !/<!-- task-id: [a-z0-9]+ -->/.test(lines[i])) {
+                continue
+            }
+
+            const normalized = this.normalizeSyncItemLineForTasksCompatibility(lines[i])
+            if (normalized !== lines[i]) {
+                lines[i] = normalized
+                changed = true
+            }
+        }
+
+        // Then repair IDs copied by Obsidian Tasks when it materializes the next
+        // recurring occurrence. The completed occurrence keeps the original ID;
+        // every other copy gets a fresh identity before calendar sync can see it.
+        const groups = new Map<string, number[]>()
+        const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
+        for (let i = 0; i < lines.length; i++) {
+            if (!this.isSyncItemLine(lines[i])) continue
+
+            const match = lines[i].match(/<!-- task-id: ([a-z0-9]+) -->/)
+            if (!match) continue
+
+            usedIds.add(match[1])
+            const indexes = groups.get(match[1]) || []
+            indexes.push(i)
+            groups.set(match[1], indexes)
+        }
+
+        for (const [duplicatedId, indexes] of groups) {
+            if (indexes.length < 2) continue
+
+            const completedIndex = indexes.find(index =>
+                /^\s*-\s+\[[xX]\]/.test(lines[index])
+            )
+            const keeperIndex = completedIndex ?? indexes[0]
+
+            for (const index of indexes) {
+                if (index === keeperIndex) continue
+
+                const freshId = this.generateFreshTaskId(usedIds)
+                lines[index] = this.normalizeSyncItemLineForTasksCompatibility(
+                    lines[index].replace(
+                        `<!-- task-id: ${duplicatedId} -->`,
+                        `<!-- task-id: ${freshId} -->`
+                    )
+                )
+                changed = true
+                reassigned++
+
+                LogUtils.debug(
+                    `Reassigned file-level recurring task ID ${duplicatedId} -> ${freshId}`
+                )
+            }
+        }
+
+        return {
+            content: changed ? lines.join('\n') : content,
+            changed,
+            reassigned
+        }
+    }
+
+    /**
+     * Repair a Markdown file independently of CodeMirror. This is the critical
+     * path for Reading mode/mobile, where Obsidian Tasks updates the vault but
+     * there may be no active editor transaction for us to observe.
+     */
+    public async repairTaskIdsInFile(file: TFile): Promise<boolean> {
+        const existing = this.fileRepairPromises.get(file.path)
+        if (existing) return existing
+
+        const repairPromise = (async () => {
+            const content = await this.plugin.app.vault.read(file)
+            const repaired = this.repairSyncContentForRecurringTasks(content)
+            if (!repaired.changed) return false
+
+            this.modifyLock = true
+            try {
+                await this.plugin.app.vault.modify(file, repaired.content)
+            } finally {
+                this.modifyLock = false
+            }
+
+            LogUtils.debug(
+                `Repaired recurring IDs in ${file.path}; reassigned=${repaired.reassigned}`
+            )
+            return true
+        })()
+
+        this.fileRepairPromises.set(file.path, repairPromise)
+        try {
+            return await repairPromise
+        } finally {
+            if (this.fileRepairPromises.get(file.path) === repairPromise) {
+                this.fileRepairPromises.delete(file.path)
+            }
+        }
     }
 
     public normalizeTaskIdsInView(view: EditorView): boolean {
@@ -172,83 +290,24 @@ export class TokenController {
         }
 
         let changedFiles = 0
-        this.modifyLock = true
-        try {
-            for (const path of candidatePaths) {
-                const abstractFile = this.plugin.app.vault.getAbstractFileByPath(path)
-                if (!(abstractFile instanceof TFile)) continue
 
-                const content = await this.plugin.app.vault.read(abstractFile)
-                if (!content.includes('<!-- task-id:')) continue
+        for (const path of candidatePaths) {
+            const abstractFile = this.plugin.app.vault.getAbstractFileByPath(path)
+            if (!(abstractFile instanceof TFile)) continue
 
-                const lines = content.split('\n')
-                let changed = false
-
-                for (let i = 0; i < lines.length; i++) {
-                    if (!this.isSyncItemLine(lines[i]) ||
-                        !/<!-- task-id: [a-z0-9]+ -->/.test(lines[i])) {
-                        continue
-                    }
-
-                    const normalized = this.normalizeSyncItemLineForTasksCompatibility(lines[i])
-                    if (normalized !== lines[i]) {
-                        lines[i] = normalized
-                        changed = true
-                    }
-                }
-
-                // Repair duplicate IDs already left behind by recurring tasks
-                // before this fix was installed.
-                const groups = new Map<string, number[]>()
-                const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
-
-                for (let i = 0; i < lines.length; i++) {
-                    const match = lines[i].match(/<!-- task-id: ([a-z0-9]+) -->/)
-                    if (!match || !this.isSyncItemLine(lines[i])) continue
-
-                    usedIds.add(match[1])
-                    const indexes = groups.get(match[1]) || []
-                    indexes.push(i)
-                    groups.set(match[1], indexes)
-                }
-
-                for (const [duplicatedId, indexes] of groups) {
-                    if (indexes.length < 2) continue
-
-                    const completedIndex = indexes.find(index =>
-                        /^\s*-\s+\[[xX]\]/.test(lines[index])
-                    )
-                    const keeperIndex = completedIndex ?? indexes[0]
-
-                    for (const index of indexes) {
-                        if (index === keeperIndex) continue
-
-                        const freshId = this.generateFreshTaskId(usedIds)
-                        lines[index] = this.normalizeSyncItemLineForTasksCompatibility(
-                            lines[index].replace(
-                                `<!-- task-id: ${duplicatedId} -->`,
-                                `<!-- task-id: ${freshId} -->`
-                            )
-                        )
-                        changed = true
-
-                        LogUtils.debug(
-                            `Migrated duplicated recurring task ID ${duplicatedId} -> ${freshId}`
-                        )
-                    }
-                }
-
-                if (changed) {
-                    await this.plugin.app.vault.modify(abstractFile, lines.join('\n'))
+            try {
+                if (await this.repairTaskIdsInFile(abstractFile)) {
                     changedFiles++
                 }
+            } catch (error) {
+                LogUtils.error(`Failed to repair task IDs in ${path}: ${error}`)
             }
-        } finally {
-            this.modifyLock = false
         }
 
         if (changedFiles > 0) {
-            LogUtils.info(`Moved task IDs to the Tasks-compatible position in ${changedFiles} file(s)`)
+            LogUtils.info(
+                `Tasks compatibility repair updated ${changedFiles} file(s)`
+            )
         }
     }
 
@@ -284,6 +343,13 @@ export class TokenController {
                 if (!this.plugin.taskParser.isFileInScope(file)) return
 
                 try {
+                    // Reading mode has no CodeMirror editor transaction. Repair
+                    // recurring IDs at the vault level before any calendar-sync
+                    // handler can safely consume this file.
+                    if (await this.repairTaskIdsInFile(file)) {
+                        return
+                    }
+
                     this.modifyLock = true
                     const content = await this.plugin.app.vault.read(file)
                     const lines = content.split('\n')
