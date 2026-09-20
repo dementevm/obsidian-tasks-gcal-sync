@@ -12,6 +12,10 @@ This repository started from [Sasoon/obsidian-gcal-sync](https://github.com/Saso
 - Google refresh token stored in Obsidian SecretStorage.
 - PKCE state/verifier stay device-local and are not synced through plugin settings.
 - Configurable target calendar instead of hard-coded `primary`.
+- `primary` requires explicit local confirmation.
+- Whole-vault scanning is opt-in; folder mismatches never fall back to scanning everything.
+- Automatic orphan cleanup/repair is disabled; destructive cleanup is explicit and confirmed.
+- Refresh tokens and in-flight OAuth state are scoped per vault.
 - OAuth bridge is isolated in the public `dementevm/obsidian-tasks-gcal-sync-bridge` repository.
 - Separate plugin ID: `obsidian-tasks-gcal-sync`.
 
@@ -73,6 +77,7 @@ calendar date are not tracked and do not receive plugin task IDs:
 ```
 
 Adding `📅 YYYY-MM-DD` turns a checkbox task into a calendar-synced task.
+Removing `📅` from an already-tracked line explicitly stops calendar tracking and removes its managed event on the next allowed sync.
 
 ### Editor suggestions
 
@@ -84,6 +89,8 @@ Type `@` in a Markdown list line to open the plugin's metadata suggestions:
 - `@rem` → 🔔
 - `@dur` → ⏱
 - `@end` → ➡️
+
+You can also run **Tasks GCal: Create calendar reminder** from the command palette. It opens a small form for title/date/time/reminder/duration and inserts a `📆` line into the active note.
 
 ## Privacy model
 
@@ -112,6 +119,44 @@ Obsidian Tasks -----------------------> Google Calendar API
 The bridge contains no secrets and performs no server-side token exchange.
 
 Normal plugin configuration can be synced through your vault. OAuth secrets are intentionally device-local.
+
+## Sync semantics and safety
+
+- Obsidian is the source of truth. Google Calendar edits are not imported back.
+- Managed Google events include a description telling you to edit the item in Obsidian.
+- `Sync Now` creates/updates explicit items and processes explicit removals; it does **not** perform generic orphan cleanup.
+- Generic orphan/duplicate cleanup is available only as an explicit, previewed action from Diagnostics / the sync menu.
+- Repair is never run periodically by Auto-sync.
+- Recurrence remains owned by the Obsidian Tasks plugin. Each generated occurrence receives its own hidden calendar ID; this plugin does not create a Google recurring series.
+
+## Time zones
+
+Timed events capture the device's IANA time zone on first sync (for example `Europe/Amsterdam` or `Asia/Seoul`) and keep it in item metadata. If you create a theatre ticket while your phone is in Korea, the event is created in the Korean time zone. Later background sync from another country does not reinterpret the same wall-clock time.
+
+## Reminder profiles
+
+Defaults are independent:
+
+- Timed checkbox task reminder: 30 minutes before.
+- Informational `📆` reminder: at event start (0 minutes before).
+- Informational event with no `⏰`: Morning Event Time, 09:00 by default.
+- Timed item duration: 5 minutes by default.
+- All-day checkbox tasks: no popup by default. Google all-day reminders can be explicitly enabled; an explicit `🔔` always wins.
+
+## Device setup transfer
+
+Use **Copy Setup Link** in settings or the command palette. The generated `obsidian://tasks-gcal-sync/setup?... ` link can be sent to another device and opened there.
+
+The setup link includes only non-secret configuration such as OAuth Client ID, Calendar ID, sync scope, folders, reminder defaults and mobile options. It never includes:
+
+- OAuth client secret
+- Google refresh/access tokens
+- task metadata
+- hidden task IDs
+- Auto-sync=ON consent
+- consent to use the primary calendar
+
+After import, configure/select the local SecretStorage entry and authenticate that device if needed.
 
 ## Setup
 
@@ -144,7 +189,7 @@ Then restart/reload Obsidian and enable **Tasks Google Calendar Sync**.
 
 ## Current status
 
-Private development version: `0.2.0-private.1`.
+Private development version: `0.2.0-private.4`.
 
 Before treating the plugin as stable we still need to validate the complete OAuth and calendar lifecycle on desktop and iOS:
 
