@@ -122,10 +122,11 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                             return;
                         }
                         this.plugin.settings.primaryCalendarConfirmed = true;
-                    } else if (nextId !== 'primary') {
-                        this.plugin.settings.primaryCalendarConfirmed = false;
                     }
 
+                    // Primary consent is device-local and persists once explicitly
+                    // granted. Existing tasks may remain bound to primary even after
+                    // the default Calendar ID is switched back to a dedicated calendar.
                     const calendarChanged = nextId !== this.plugin.settings.calendarId;
                     this.plugin.settings.calendarId = nextId;
 
