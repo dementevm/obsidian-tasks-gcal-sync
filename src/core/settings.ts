@@ -10,18 +10,23 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     oauthRedirectUri: 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/',
     oauth2Tokens: undefined,
     syncEnabled: false,
-    calendarId: 'primary',
+    calendarId: '',
+    primaryCalendarConfirmed: false,
+    scanEntireVault: false,
     defaultReminder: 30,
+    defaultTimedTaskReminderMinutes: 30,
+    defaultInformationalEventReminderMinutes: 0,
+    allDayTaskRemindersEnabled: false,
     defaultEventDurationMinutes: 5,
     defaultMorningEventTime: '09:00',
-    includeFolders: [],  // Empty by default to scan all folders
+    includeFolders: [],
     taskMetadata: {},
     taskIds: {},
     verboseLogging: false,
     hasCompletedOnboarding: true,  // Set to true to prevent welcome modal on startup
     mobileSyncLimit: 100,  // Default to 100 files on mobile
     mobileOptimizations: true,  // Enable mobile optimizations by default
-    settingsSchemaVersion: 2,
+    settingsSchemaVersion: 3,
 };
 
 export class GoogleCalendarSettingsTab extends PluginSettingTab {
@@ -55,45 +60,100 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Folders to Sync')
-            .setDesc('Specify folders to scan for tasks. One folder per line. Leave empty to scan all folders.')
-            .addTextArea(text => text
-                .setPlaceholder('folder1\nfolder2/subfolder')
-                .setValue(this.plugin.settings.includeFolders.join('\n'))
+            .setName('Scan Entire Vault')
+            .setDesc('Explicitly allow this plugin to scan every Markdown file in the vault. When disabled, only the folders below are scanned.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.scanEntireVault)
                 .onChange(async (value) => {
-                    this.plugin.settings.includeFolders = value
-                        .split('\n')
-                        .map(folder => folder.trim())
-                        .filter(folder => folder.length > 0);
+                    this.plugin.settings.scanEntireVault = value;
                     await this.plugin.saveSettings();
+                    this.display();
                 }));
+
+        if (!this.plugin.settings.scanEntireVault) {
+            new Setting(containerEl)
+                .setName('Folders to Sync')
+                .setDesc('Only these folders/files are scanned. If nothing matches, sync stops safely instead of falling back to the whole vault.')
+                .addTextArea(text => text
+                    .setPlaceholder('folder1\nfolder2/subfolder')
+                    .setValue(this.plugin.settings.includeFolders.join('\n'))
+                    .onChange(async (value) => {
+                        this.plugin.settings.includeFolders = value
+                            .split('\n')
+                            .map(folder => folder.trim())
+                            .filter(folder => folder.length > 0);
+                        await this.plugin.saveSettings();
+                    }));
+        }
 
         // Calendar Settings Section
         containerEl.createEl('h3', { text: 'Calendar Settings' });
 
         new Setting(containerEl)
             .setName('Calendar ID')
-            .setDesc('Google Calendar ID to sync with. Use "primary" for your main calendar, or paste the ID of a dedicated calendar such as Obsidian Tasks.')
+            .setDesc('Paste the full ID of a dedicated Google calendar. Using "primary" is allowed only after explicit confirmation.')
             .addText(text => text
-                .setPlaceholder('primary')
-                .setValue(this.plugin.settings.calendarId || 'primary')
+                .setPlaceholder('...@group.calendar.google.com')
+                .setValue(this.plugin.settings.calendarId || '')
                 .onChange(async (value) => {
-                    this.plugin.settings.calendarId = value.trim() || 'primary';
+                    const nextId = value.trim();
+                    if (nextId === 'primary' && !this.plugin.settings.primaryCalendarConfirmed) {
+                        const confirmed = window.confirm(
+                            'Use your PRIMARY Google Calendar?\n\n' +
+                            'Obsidian-managed events can be created, updated, and explicitly deleted there. ' +
+                            'A dedicated calendar is safer. Continue?'
+                        );
+                        if (!confirmed) {
+                            this.plugin.settings.calendarId = '';
+                            this.plugin.settings.primaryCalendarConfirmed = false;
+                            await this.plugin.saveSettings();
+                            this.display();
+                            return;
+                        }
+                        this.plugin.settings.primaryCalendarConfirmed = true;
+                    } else if (nextId !== 'primary') {
+                        this.plugin.settings.primaryCalendarConfirmed = false;
+                    }
+                    this.plugin.settings.calendarId = nextId;
                     await this.plugin.saveSettings();
                 }));
 
         new Setting(containerEl)
-            .setName('Default Reminder')
-            .setDesc('Default reminder time in minutes before the task (if no specific reminder is set)')
+            .setName('Timed Task Reminder')
+            .setDesc('Default popup in minutes before a checkbox task with an explicit ⏰ time.')
             .addText(text => text
                 .setPlaceholder('30')
-                .setValue(this.plugin.settings.defaultReminder.toString())
+                .setValue(this.plugin.settings.defaultTimedTaskReminderMinutes.toString())
                 .onChange(async (value) => {
                     const reminder = parseInt(value);
                     if (!isNaN(reminder) && reminder >= 0) {
-                        this.plugin.settings.defaultReminder = reminder;
+                        this.plugin.settings.defaultTimedTaskReminderMinutes = reminder;
                         await this.plugin.saveSettings();
                     }
+                }));
+
+        new Setting(containerEl)
+            .setName('Informational Event Reminder')
+            .setDesc('Default popup in minutes before a 📆 event when 🔔 is omitted. 0 means at event start.')
+            .addText(text => text
+                .setPlaceholder('0')
+                .setValue(this.plugin.settings.defaultInformationalEventReminderMinutes.toString())
+                .onChange(async (value) => {
+                    const reminder = parseInt(value);
+                    if (!isNaN(reminder) && reminder >= 0) {
+                        this.plugin.settings.defaultInformationalEventReminderMinutes = reminder;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('All-day Task Reminders')
+            .setDesc('All-day checkbox tasks have no popup by default. Enable only if you intentionally want Google all-day reminder behavior (relative to midnight).')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.allDayTaskRemindersEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.allDayTaskRemindersEnabled = value;
+                    await this.plugin.saveSettings();
                 }));
 
         new Setting(containerEl)
