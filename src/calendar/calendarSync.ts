@@ -53,6 +53,8 @@ export class CalendarSync {
     private readonly plugin: GoogleCalendarSyncPlugin;
     private processingQueue = new Set<string>();
     private processingPromises = new Map<string, Promise<any>>();
+    /** Internal per-key serialization for Google Calendar operations. */
+    private lockChains = new Map<string, Promise<void>>();
 
     // Cache to store events during a sync session
     private eventsCache: {
@@ -118,92 +120,38 @@ export class CalendarSync {
         }
     }
 
-    private async withLock<T>(lockKey: string, operation: () => Promise<T>, maxWaitTime: number = TIMING.LOCK_TIMEOUT_MS): Promise<T> {
-        const startTime = Date.now();
+    private async withLock<T>(
+        lockKey: string,
+        operation: () => Promise<T>,
+        maxWaitTime: number = TIMING.LOCK_TIMEOUT_MS
+    ): Promise<T> {
+        const normalizedKey = lockKey.toLowerCase().trim().replace(/\\s+/g, '');
+        const previous = this.lockChains.get(normalizedKey) ?? Promise.resolve();
 
-        // Normalize lock key: lowercase, trim whitespace, consistent colon separator
-        const normalizedKey = lockKey.toLowerCase().trim().replace(/\s+/g, '');
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const tail = previous.catch(() => undefined).then(() => gate);
+        this.lockChains.set(normalizedKey, tail);
 
-        // Generate a unique operation ID for this specific lock attempt
-        const operationId = `${normalizedKey.substring(0, 20)}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        LogUtils.debug(`Lock operation started: ${operationId} for key "${normalizedKey}"`);
+        const waitWarning = setTimeout(() => {
+            LogUtils.warn(
+                'Still waiting for calendar lock "' + normalizedKey + '" after ' + maxWaitTime + 'ms. ' +
+                'The active operation is not force-released because the underlying network request cannot be safely cancelled.'
+            );
+        }, maxWaitTime);
 
-        // If we already have the lock (i.e. we're the processing task), proceed
-        if (useStore.getState().processingTasks.has(normalizedKey)) {
-            LogUtils.debug(`Already have lock for "${normalizedKey}", proceeding with operation ${operationId}`);
-            return operation();
-        }
-
-        // Try to acquire lock with exponential backoff
-        // Re-read state on each iteration to see lock releases by other code paths
-        while (useStore.getState().isTaskLocked(normalizedKey)) {
-            if (Date.now() - startTime > maxWaitTime) {
-                LogUtils.warn(`Lock acquisition timeout for key "${normalizedKey}" (operation: ${operationId}) after ${maxWaitTime}ms`);
-
-                // Check if the lock appears to be stale
-                const lockTime = useStore.getState().getLockTimestamp(normalizedKey);
-                if (lockTime && Date.now() - lockTime > TIMING.LOCK_TIMEOUT_MS) {
-                    // Force-release the stale lock, but DON'T proceed with this operation
-                    // The original operation might still be running (just slow/stuck)
-                    LogUtils.warn(`Force-releasing stale lock for key "${normalizedKey}" (locked for ${Date.now() - lockTime}ms)`);
-                    useStore.getState().removeProcessingTask(normalizedKey);
-                    // Abort this operation to prevent duplicate execution
-                    throw new Error(`Stale lock released for "${normalizedKey}". Operation ${operationId} aborted - retry will be scheduled.`);
-                }
-
-                throw new Error(`Lock timeout: Failed to acquire lock for key "${normalizedKey}" after ${maxWaitTime}ms (operation: ${operationId})`);
-            }
-
-            // Exponential backoff with jitter to prevent thundering herd
-            const attempts = useStore.getState().getLockAttempts(normalizedKey);
-            const baseWait = Math.min(Math.pow(2, attempts) * 100, 1000);
-            const jitter = Math.floor(Math.random() * 100); // Add random jitter
-            const waitTime = baseWait + jitter;
-
-            LogUtils.debug(`Waiting ${waitTime}ms for lock on "${normalizedKey}" (attempt ${attempts + 1})`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            useStore.getState().incrementLockAttempts(normalizedKey);
-        }
-
-        // Track timeout handle for cleanup
-        let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+        await previous.catch(() => undefined);
+        clearTimeout(waitWarning);
 
         try {
-            LogUtils.debug(`Acquired lock for "${normalizedKey}" (${operationId})`);
-            useStore.getState().addProcessingTask(normalizedKey);
-
-            // Add operation timeout as an additional safety measure
-            const timeoutPromise = new Promise<never>((_, reject) => {
-                timeoutHandle = setTimeout(() => {
-                    reject(new Error(`Operation timeout: Lock "${normalizedKey}" held too long (operation: ${operationId}, max: ${maxWaitTime}ms)`));
-                }, maxWaitTime);
-            });
-
-            // Race between operation and timeout
-            const result = await Promise.race([
-                operation(),
-                timeoutPromise
-            ]);
-
-            // Clear the timeout on successful completion to prevent memory leaks
-            if (timeoutHandle) {
-                clearTimeout(timeoutHandle);
-                timeoutHandle = null;
-            }
-
-            return result;
-        } catch (error) {
-            // Clear the timeout on error to prevent memory leaks
-            if (timeoutHandle) {
-                clearTimeout(timeoutHandle);
-                timeoutHandle = null;
-            }
-            LogUtils.error(`Error during locked operation ${operationId} for key "${normalizedKey}":`, error);
-            throw error;
+            return await operation();
         } finally {
-            LogUtils.debug(`Releasing lock for "${normalizedKey}" (${operationId})`);
-            useStore.getState().removeProcessingTask(normalizedKey);
-            useStore.getState().resetLockAttempts(normalizedKey);
+            release();
+            if (this.lockChains.get(normalizedKey) === tail) {
+                this.lockChains.delete(normalizedKey);
+            }
         }
     }
 
