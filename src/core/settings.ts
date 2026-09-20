@@ -119,6 +119,26 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
+        if (this.plugin.settings.calendarId === 'primary' &&
+            !this.plugin.settings.primaryCalendarConfirmed) {
+            new Setting(containerEl)
+                .setName('Primary Calendar Confirmation Required')
+                .setDesc('Setup links never transfer this consent. Confirm locally before sync can use the primary calendar.')
+                .addButton(button => button
+                    .setButtonText('Confirm Primary Calendar')
+                    .setWarning()
+                    .onClick(async () => {
+                        const confirmed = window.confirm(
+                            'Confirm use of your PRIMARY Google Calendar?\n\n' +
+                            'Obsidian-managed events may be created, updated, and explicitly deleted there.'
+                        );
+                        if (!confirmed) return;
+                        this.plugin.settings.primaryCalendarConfirmed = true;
+                        await this.plugin.saveSettings();
+                        this.display();
+                    }));
+        }
+
         new Setting(containerEl)
             .setName('Timed Task Reminder')
             .setDesc('Default popup in minutes before a checkbox task with an explicit ⏰ time.')
@@ -237,6 +257,17 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                         this.plugin.settings.mobileSyncLimit = limit;
                         await this.plugin.saveSettings();
                     }
+                }));
+
+        containerEl.createEl('h3', { text: 'Device Setup Transfer' });
+
+        new Setting(containerEl)
+            .setName('Copy Setup Link')
+            .setDesc('Copies an obsidian:// link with non-secret sync configuration. Client secret, refresh token, task metadata, and auto-sync state are never included.')
+            .addButton(button => button
+                .setButtonText('Copy Setup Link')
+                .onClick(async () => {
+                    await this.plugin.copySetupLink();
                 }));
 
         // OAuth Settings Section
