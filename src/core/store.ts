@@ -214,7 +214,7 @@ type StorePersist = {
     name: string;
     version: number;
     partialize: (state: TaskStore) => PersistState;
-    merge: (persistedState: PersistState, currentState: TaskStore) => TaskStore;
+    merge: (persistedState: unknown, currentState: TaskStore) => TaskStore;
 };
 
 /**
@@ -256,13 +256,16 @@ const persistConfig: StorePersist = {
         // and failedSyncs are ephemeral runtime state and must NOT be persisted.
         // They are stale after a restart and cause tasks to appear permanently locked.
     }),
-    merge: (persistedState, currentState) => ({
-        ...currentState,
-        syncEnabled: persistedState.syncEnabled ?? currentState.syncEnabled,
-        authenticated: persistedState.authenticated ?? currentState.authenticated,
-        taskVersions: new Map(persistedState.taskVersions || []),
-        lastSyncTime: persistedState.lastSyncTime ?? currentState.lastSyncTime
-    })
+    merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as PersistState;
+        return {
+            ...currentState,
+            syncEnabled: persisted.syncEnabled ?? currentState.syncEnabled,
+            authenticated: persisted.authenticated ?? currentState.authenticated,
+            taskVersions: new Map(persisted.taskVersions || []),
+            lastSyncTime: persisted.lastSyncTime ?? currentState.lastSyncTime
+        };
+    }
 };
 
 export const store = createStore<TaskStore>()(
@@ -1108,7 +1111,7 @@ export const store = createStore<TaskStore>()(
                             }
                         } catch (error) {
                             // If caching fails, just log and continue (non-critical)
-                            LogUtils.debug(`Failed to cache task ${taskId}: ${error.message}`);
+                            LogUtils.debug(`Failed to cache task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
                         }
                     }),
 
@@ -1126,7 +1129,7 @@ export const store = createStore<TaskStore>()(
                         }
                     } catch (error) {
                         // If cache retrieval fails, just return undefined
-                        LogUtils.debug(`Failed to get cached task ${taskId}: ${error.message}`);
+                        LogUtils.debug(`Failed to get cached task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
                     }
                     return undefined;
                 },
