@@ -43,6 +43,18 @@ export class TokenController {
         this.registerEditorHandlers()
     }
 
+    private generateFreshTaskId(usedIds: Set<string>): string {
+        const { IdUtils } = require('../utils/idUtils')
+
+        let id = IdUtils.generateTimeBasedId()
+        while (usedIds.has(id)) {
+            id = IdUtils.generateTimeBasedId()
+        }
+
+        usedIds.add(id)
+        return id
+    }
+
     /**
      * Keep the plugin's private ID before user text and before any Obsidian Tasks
      * metadata. Obsidian Tasks parses its metadata from right to left and stops
@@ -182,6 +194,47 @@ export class TokenController {
                     if (normalized !== lines[i]) {
                         lines[i] = normalized
                         changed = true
+                    }
+                }
+
+                // Repair duplicate IDs already left behind by recurring tasks
+                // before this fix was installed.
+                const groups = new Map<string, number[]>()
+                const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
+                for (let i = 0; i < lines.length; i++) {
+                    const match = lines[i].match(/<!-- task-id: ([a-z0-9]+) -->/)
+                    if (!match || !this.isSyncItemLine(lines[i])) continue
+
+                    usedIds.add(match[1])
+                    const indexes = groups.get(match[1]) || []
+                    indexes.push(i)
+                    groups.set(match[1], indexes)
+                }
+
+                for (const [duplicatedId, indexes] of groups) {
+                    if (indexes.length < 2) continue
+
+                    const completedIndex = indexes.find(index =>
+                        /^\s*-\s+\[[xX]\]/.test(lines[index])
+                    )
+                    const keeperIndex = completedIndex ?? indexes[0]
+
+                    for (const index of indexes) {
+                        if (index === keeperIndex) continue
+
+                        const freshId = this.generateFreshTaskId(usedIds)
+                        lines[index] = this.normalizeSyncItemLineForTasksCompatibility(
+                            lines[index].replace(
+                                `<!-- task-id: ${duplicatedId} -->`,
+                                `<!-- task-id: ${freshId} -->`
+                            )
+                        )
+                        changed = true
+
+                        LogUtils.debug(
+                            `Migrated duplicated recurring task ID ${duplicatedId} -> ${freshId}`
+                        )
                     }
                 }
 
@@ -336,16 +389,29 @@ export class TokenController {
     }
 
     public ensureUniqueTaskIdsInView(view: EditorView): boolean {
-        // Tasks recurrence and some external edits can duplicate the hidden ID.
-        // Keep the ID on the completed occurrence when possible; strip it from
-        // the next active occurrence so checkForNewTasks() assigns a fresh ID.
-        // This keeps each recurrence instance as a separate Google event.
+        // Obsidian Tasks creates a recurring occurrence by copying the complete
+        // task line, including our hidden ID. The old implementation removed
+        // the copied ID and expected checkForNewTasks() to add another one, but
+        // preventDeletion intentionally blocks standalone task-id deletion.
+        //
+        // Replace the copied ID atomically instead. Replacing the whole line is
+        // treated as a normal task edit by the protection filter and guarantees
+        // that auto-sync sees the new occurrence with a distinct identity.
+        const groups = new Map<string, Array<{
+            line: any
+            completed: boolean
+            match: RegExpMatchArray
+        }>>()
 
-        const groups = new Map<string, Array<{ line: any; completed: boolean; match: RegExpMatchArray }>>()
+        const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
         for (let i = 1; i <= view.state.doc.lines; i++) {
             const line = view.state.doc.line(i)
             const match = line.text.match(/<!-- task-id: ([a-z0-9]+) -->/)
             if (!match) continue
+
+            usedIds.add(match[1])
+
             const entries = groups.get(match[1]) || []
             entries.push({
                 line,
@@ -356,30 +422,44 @@ export class TokenController {
         }
 
         const changes: { from: number; to: number; insert: string }[] = []
-        for (const entries of groups.values()) {
+
+        for (const [duplicatedId, entries] of groups) {
             if (entries.length < 2) continue
+
+            // Recurrence creates a completed old occurrence plus an active new
+            // occurrence. Preserve the completed occurrence's ID so its existing
+            // Google event/metadata remains associated with the task that was
+            // actually completed.
             const keeper = entries.find(entry => entry.completed) || entries[0]
 
             for (const entry of entries) {
                 if (entry === keeper) continue
-                const marker = entry.match[0]
-                const index = entry.line.text.indexOf(marker)
-                if (index < 0) continue
-                const before = entry.line.text.slice(0, index)
-                const removeLeadingSpace = before.endsWith(' ') ? 1 : 0
+
+                const freshId = this.generateFreshTaskId(usedIds)
+                const newMarker = `<!-- task-id: ${freshId} -->`
+                const updatedLine = this.normalizeSyncItemLineForTasksCompatibility(
+                    entry.line.text.replace(entry.match[0], newMarker)
+                )
+
                 changes.push({
-                    from: entry.line.from + index - removeLeadingSpace,
-                    to: entry.line.from + index + marker.length,
-                    insert: ''
+                    from: entry.line.from,
+                    to: entry.line.to,
+                    insert: updatedLine
                 })
+
+                LogUtils.debug(
+                    `Reassigned copied recurring task ID ${duplicatedId} -> ${freshId}`
+                )
             }
         }
 
         if (changes.length === 0) return false
 
+        // CodeMirror accepts multiple full-line replacements in document order.
         changes.sort((a, b) => a.from - b.from)
         view.dispatch({ changes })
-        LogUtils.debug(`Removed ${changes.length} duplicated task IDs; fresh IDs will be generated`)
+
+        LogUtils.debug(`Reassigned ${changes.length} duplicated recurring task ID(s)`)
         return true
     }
 
@@ -426,7 +506,7 @@ export class TokenController {
 
                 // Obsidian Tasks can create the next recurrence by copying the
                 // entire task line, including our hidden ID. Fix placement and
-                // duplicates before the plugin's auto-sync debounce sees them.
+                // atomically reassign copied IDs before auto-sync sees them.
                 if (controller.normalizeTaskIdsInView(update.view)) return;
                 if (controller.ensureUniqueTaskIdsInView(update.view)) return;
 
