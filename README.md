@@ -61,6 +61,19 @@ Examples:
 
 Explicit end time `➡️` takes precedence over `⏱` duration.
 
+### Plain checklists are ignored
+
+Calendar sync is opt-in via the `📅` date marker. Ordinary checklists without a
+calendar date are not tracked and do not receive plugin task IDs:
+
+```markdown
+- [ ] Milk
+- [ ] Cat litter
+- [ ] Coffee
+```
+
+Adding `📅 YYYY-MM-DD` turns a checkbox task into a calendar-synced task.
+
 ### Editor suggestions
 
 Type `@` in a Markdown list line to open the plugin's metadata suggestions:
