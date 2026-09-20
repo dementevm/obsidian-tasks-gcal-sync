@@ -1,52 +1,98 @@
 import { ERROR_MESSAGES } from '../config/constants';
 
-type ErrorLike = {
-    message?: string;
+type ErrorMetadata = Error & {
     status?: number;
     code?: string;
+    response?: string;
 };
 
 export class ErrorUtils {
-    private static toErrorLike(error: unknown): ErrorLike {
-        return typeof error === 'object' && error !== null
-            ? error as ErrorLike
-            : {};
+    private static getMetadata(error: unknown): {
+        status?: number;
+        code?: string;
+        response?: string;
+    } {
+        if (typeof error !== 'object' || error === null) return {};
+
+        const candidate = error as {
+            status?: unknown;
+            code?: unknown;
+            response?: unknown;
+        };
+
+        return {
+            status: typeof candidate.status === 'number' ? candidate.status : undefined,
+            code: typeof candidate.code === 'string' ? candidate.code : undefined,
+            response: typeof candidate.response === 'string' ? candidate.response : undefined,
+        };
+    }
+
+    private static copyMetadata(target: Error, source: unknown): ErrorMetadata {
+        const metadata = this.getMetadata(source);
+        const result = target as ErrorMetadata;
+
+        if (metadata.status !== undefined) result.status = metadata.status;
+        if (metadata.code !== undefined) result.code = metadata.code;
+        if (metadata.response !== undefined) result.response = metadata.response;
+
+        return result;
     }
 
     static isEventGoneError(error: unknown): boolean {
-        if (!(error instanceof Error)) return false;
+        const { status } = this.getMetadata(error);
+        if (status === 404 || status === 410) return true;
 
-        return error.message.includes('status 404') ||
-            error.message.includes('status 410') ||
-            error.message.includes('Event already deleted');
+        const message = error instanceof Error ? error.message : String(error);
+        return message.includes('Event not found') ||
+            message.includes('Event already deleted') ||
+            message.includes('status 404') ||
+            message.includes('status 410');
     }
 
-    private static isNetworkError(error: unknown): boolean {
-        const info = this.toErrorLike(error);
-        return info.message?.toLowerCase().includes('network') === true ||
-            info.message?.toLowerCase().includes('timeout') === true ||
-            info.code === 'ECONNRESET';
+    static isNetworkError(error: unknown): boolean {
+        const { code } = this.getMetadata(error);
+        const message = error instanceof Error ? error.message : String(error);
+
+        return code === 'ECONNRESET' ||
+            /network|timeout|timed out|fetch failed/i.test(message);
     }
 
-    private static createError(type: keyof typeof ERROR_MESSAGES, details?: string): Error {
-        const message = details
-            ? `${ERROR_MESSAGES[type]}: ${details}`
-            : ERROR_MESSAGES[type];
+    static isRetryableError(error: unknown): boolean {
+        const { status } = this.getMetadata(error);
+        return status === 429 ||
+            (status !== undefined && status >= 500) ||
+            (status === undefined && this.isNetworkError(error));
+    }
 
-        return new Error(message);
+    static formatError(error: unknown): string {
+        if (error instanceof Error) {
+            return `${error.name}: ${error.message}`;
+        }
+        return String(error);
+    }
+
+    static createError(
+        type: keyof typeof ERROR_MESSAGES,
+        details?: string,
+        source?: unknown,
+    ): ErrorMetadata {
+        const base = ERROR_MESSAGES[type];
+        const error = new Error(details ? `${base}: ${details}` : base);
+        return this.copyMetadata(error, source);
     }
 
     static handleCommonErrors(error: unknown): Error {
-        const info = this.toErrorLike(error);
+        const { status } = this.getMetadata(error);
 
-        if (info.status === 401) return this.createError('AUTH_REQUIRED');
-        if (info.status === 403) return this.createError('AUTH_FAILED');
-        if (info.status === 429) return this.createError('RATE_LIMIT');
-        if (info.status === 410) return this.createError('EVENT_ALREADY_DELETED');
-        if (info.status === 404) return this.createError('EVENT_NOT_FOUND');
+        if (status === 401) return this.createError('AUTH_REQUIRED', undefined, error);
+        if (status === 403) return this.createError('AUTH_FAILED', undefined, error);
+        if (status === 429) return this.createError('RATE_LIMIT', undefined, error);
+        if (status === 410) return this.createError('EVENT_ALREADY_DELETED', undefined, error);
+        if (status === 404) return this.createError('EVENT_NOT_FOUND', undefined, error);
 
         if (this.isNetworkError(error)) {
-            return this.createError('NETWORK_ERROR', info.message);
+            const details = error instanceof Error ? error.message : String(error);
+            return this.createError('NETWORK_ERROR', details, error);
         }
 
         return error instanceof Error ? error : new Error(String(error));
