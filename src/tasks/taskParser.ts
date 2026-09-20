@@ -30,12 +30,16 @@ export class TaskParser {
 
     constructor(private plugin: GoogleCalendarSyncPlugin) { }
 
-    private getFilteredFiles(): TFile[] {
+    public getFilteredFiles(): TFile[] {
         const allFiles = this.plugin.app.vault.getMarkdownFiles();
 
-        // If no include settings, return all files
-        if (!this.plugin.settings.includeFolders || this.plugin.settings.includeFolders.length === 0) {
+        if (this.plugin.settings.scanEntireVault) {
             return allFiles;
+        }
+
+        if (!this.plugin.settings.includeFolders || this.plugin.settings.includeFolders.length === 0) {
+            LogUtils.warn('No sync folders configured and Scan Entire Vault is disabled.');
+            return [];
         }
 
         // Create result array for matched files
@@ -81,10 +85,9 @@ export class TaskParser {
             .map(path => allFiles.find(file => file.path === path))
             .filter((file): file is TFile => file !== undefined);
 
-        // If no files found after all approaches, use all files with a warning
         if (uniqueFiles.length === 0) {
-            LogUtils.warn(`No files match folder inclusion settings. Using all files as fallback. Check your settings.`);
-            return allFiles;
+            LogUtils.warn('No files match folder inclusion settings. Sync is stopped safely for this scope.');
+            return [];
         }
 
         return uniqueFiles;
@@ -97,11 +100,12 @@ export class TaskParser {
             return [];
         }
 
-        // Check if file is in included folders
-        if (this.plugin.settings.includeFolders.length > 0 &&
-            !this.plugin.settings.includeFolders.some(folder => file.path.startsWith(folder))) {
-            LogUtils.debug(`File ${file.path} not in included folders, skipping`);
-            return [];
+        if (!this.plugin.settings.scanEntireVault) {
+            const allowedFiles = new Set(this.getFilteredFiles().map(candidate => candidate.path));
+            if (!allowedFiles.has(file.path)) {
+                LogUtils.debug(`File ${file.path} is outside the configured sync scope, skipping`);
+                return [];
+            }
         }
 
         try {
