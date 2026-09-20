@@ -163,4 +163,4 @@ A release candidate is ready for merge/tagging when:
 - [x] GitHub Build workflow is green on the release-preparation/final main commit;
 - [x] release version metadata is bumped consistently before tagging;
 - [x] the published `1.0.0` tag exactly matched `manifest.json.version` at release time.
-- [ ] the `1.0.1` tag exactly matches `manifest.json.version` before publishing the maintenance release.
+- [x] the published `1.0.1` tag exactly matched `manifest.json.version`; its release workflow completed successfully with the required assets.
