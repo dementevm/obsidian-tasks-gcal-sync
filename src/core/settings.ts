@@ -67,6 +67,10 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.scanEntireVault)
                 .onChange(async (value) => {
                     this.plugin.settings.scanEntireVault = value;
+                    const state = useStore.getState();
+                    state.clearSyncQueue();
+                    state.clearTaskCache();
+                    state.clearFileCache();
                     await this.plugin.saveSettings();
                     this.display();
                 }));
@@ -83,6 +87,10 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                             .split('\n')
                             .map(folder => folder.trim())
                             .filter(folder => folder.length > 0);
+                        const state = useStore.getState();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
                         await this.plugin.saveSettings();
                     }));
         }
