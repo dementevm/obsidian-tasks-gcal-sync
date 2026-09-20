@@ -548,10 +548,6 @@ export class TaskParser {
     }
 
     private parseTaskData(line: string): ParsedTaskData {
-        if (this.plugin.settings.verboseLogging) {
-            LogUtils.debug(`Parsing task data from line: ${line}`);
-        }
-
         const dateMatch = line.match(this.DATE_PATTERN);
         const timeMatch = line.match(this.TIME_PATTERN);
         const endTimeMatch = line.match(this.END_TIME_PATTERN);
