@@ -150,8 +150,8 @@ After modernizing TypeScript/build configuration and removing legacy CSS/ID help
 - [x] Complete a recurring task from Reading mode and verify fresh occurrence ID/no duplicate Calendar event.
 - [x] Create/edit a task on iOS and verify Web Crypto/static imports work without ID-generation errors.
 - [x] Verify the iOS-created task can subsequently be edited from desktop and updates the same Calendar event.
-- [ ] Open an existing tracked note on iOS from a cold/open state and verify the raw `<!-- task-id: ... -->` marker is hidden immediately, before the first editor transaction.
-- [ ] Reload the plugin/app on iOS and repeat the initial-render visibility check.
+- [x] Open an existing tracked note on iOS from a cold/open state and verify the raw `<!-- task-id: ... -->` marker is hidden immediately, before the first editor transaction.
+- [x] Reload the plugin/app on iOS and repeat the initial-render visibility check.
 
 ## Release gate
 
