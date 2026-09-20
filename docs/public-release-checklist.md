@@ -53,6 +53,22 @@ Status date: 2026-09-20
 - [x] Keep autocomplete usable after Tasks metadata and preserve the cursor while task lines are normalized.
 - [x] Keep generic orphan/duplicate cleanup manual and confirmed.
 
+## Repository freshness review
+
+- [x] Review every tracked root/build/config file before the 1.0.0 tag.
+- [x] Modernize tsconfig.json for ES2021, Bundler resolution, strict type checking, and src-only compilation.
+- [x] Make the build script use tsconfig.json as the single TypeScript source of truth.
+- [x] Refresh version-bump.mjs with node: imports, strict x.y.z validation, and deterministic JSON output.
+- [x] Remove stale Google revoke/primary endpoint and synthetic-timeout constants.
+- [x] Remove legacy global Obsidian Tasks CSS and keep plugin styling scoped to its own ribbon state.
+- [x] Make the hidden task-ID editor replacement genuinely invisible instead of styling/rendering the ID text.
+- [x] Replace dynamic require() for task IDs with static imports and remove Math.random() ID fallbacks.
+- [x] Tighten error/retry/logging types and remove unused logging/retry helpers.
+- [x] Remove unused legacy repair interfaces.
+- [x] Update GitHub Actions runtime to checkout/setup-node v5 with Node 24.
+- [x] Fix all strict-TypeScript issues exposed by the refreshed configuration.
+- [x] Confirm the refreshed repository builds successfully in GitHub Actions.
+
 ## Dependencies and build
 
 - [x] Update stale dependencies and commit both package.json and package-lock.json.
