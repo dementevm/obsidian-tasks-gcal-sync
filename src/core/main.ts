@@ -300,6 +300,15 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                     if (!this.taskParser.isFileInScope(file)) return;
 
                     try {
+                        // Reading mode updates the Markdown file without a
+                        // CodeMirror editor transaction. Repair recurring IDs
+                        // before this handler is allowed to parse/enqueue tasks.
+                        if (await this.tokenController.repairTaskIdsInFile(file)) {
+                            useStore.getState().invalidateFileCache(file.path);
+                            LogUtils.debug(`Deferred calendar sync until recurring IDs were repaired in ${file.path}`);
+                            return;
+                        }
+
                         // Get the file content
                         const state = useStore.getState();
                         state.invalidateFileCache(file.path);
@@ -330,7 +339,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
                             // Check for just synced tasks and skip them
                             const metadata = state.plugin.settings.taskMetadata?.[task.id];
-                            if (metadata?.justSynced && metadata.syncTimestamp) {
+                            // Completion is state-changing and must never be
+                            // suppressed by the anti-duplicate cooldown: a skipped
+                            // completed occurrence leaves its old calendar event behind.
+                            if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
                                 if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) { // Use a longer window (2 seconds)
                                     LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping (file handler)`);
@@ -372,6 +384,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                             try {
                                 state.enableTempSync();
                                 state.clearTaskCache();
+                                state.invalidateFileCache(file.path);
+                                await this.tokenController.repairTaskIdsInFile(file);
                                 state.invalidateFileCache(file.path);
                                 for (const metadata of Object.values(this.settings.taskMetadata)) {
                                     metadata.justSynced = false;
@@ -463,7 +477,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
                     if (hasChanged) {
                         // Additional check for recently synced tasks
-                        if (metadata?.justSynced && metadata.syncTimestamp) {
+                        if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                             const syncAge = Date.now() - metadata.syncTimestamp;
                             if (syncAge < 2500) { // Even longer window for editor changes
                                 LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping editor handler`);
