@@ -541,8 +541,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 if (!this.calendarSync) {
                     throw new Error('Calendar sync is not initialized; keeping metadata for retry.');
                 }
-                LogUtils.debug(`Deleting calendar event: ${eventId}`);
-                await this.calendarSync.deleteEvent(eventId);
+                const metadata = this.settings.taskMetadata[taskId];
+                const calendarId = metadata?.calendarId || this.settings.calendarId;
+                LogUtils.debug(`Deleting calendar event ${eventId} from calendar ${calendarId}`);
+                await this.calendarSync.deleteEvent(eventId, taskId, calendarId);
                 LogUtils.debug(`Successfully deleted event: ${eventId}`);
             }
 
