@@ -75,7 +75,6 @@ export interface GoogleCalendarSettings {
     mobileOptimizations?: boolean; // Enable mobile-specific optimizations (default: true)
     tempAuthState?: string; // Temporary storage for mobile auth state parameter
     tempCodeVerifier?: string; // Temporary storage for mobile auth code verifier
-    taskIdPositionMigrationVersion?: number; // One-time migration for Tasks-compatible task-id placement
 }
 
 export interface Pos {
