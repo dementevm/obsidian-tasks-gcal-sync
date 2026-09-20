@@ -71,6 +71,7 @@ export class TokenController {
         this.plugin.registerEvent(
             this.plugin.app.vault.on('modify', async (file: TFile) => {
                 if (this.modifyLock) return
+                if (!this.plugin.taskParser.isFileInScope(file)) return
 
                 try {
                     this.modifyLock = true
