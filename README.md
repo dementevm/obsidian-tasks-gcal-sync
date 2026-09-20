@@ -51,6 +51,22 @@ Desktop authenticates using your local server, however mobile does not support t
 ![image](https://github.com/user-attachments/assets/aa9d9790-7cb5-4d5f-be0e-c38c47edff3b)
 
 
+### Task ID placement and Obsidian Tasks compatibility
+
+Tracked tasks store their private sync identifier immediately after the checkbox:
+
+```markdown
+- [ ] <!-- task-id: abc123 --> Recurring task 🔁 every day when done 📅 2026-09-20
+```
+
+Do not move `<!-- task-id: ... -->` to the end of the line. Obsidian Tasks parses
+its metadata from right to left, and an unknown HTML comment at the end prevents
+recurrence and date metadata to its left from being recognized.
+
+When Obsidian Tasks creates the next occurrence of a recurring task, this plugin
+keeps the completed occurrence's ID and automatically assigns a fresh ID to the
+new occurrence.
+
 ### Date and Time Formats
 The plugin recognizes these date formats in your tasks:
 - `📅 YYYY-MM-DD` - Task date without time

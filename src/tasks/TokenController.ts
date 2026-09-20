@@ -36,6 +36,7 @@ export class TokenController {
     private modifyLock = false
     private readonly ID_PATTERN = /<!-- task-id: ([a-z0-9]+) -->/g
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
+    private readonly TASK_ID_POSITION_MIGRATION_VERSION = 1
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -43,12 +44,306 @@ export class TokenController {
         this.registerEditorHandlers()
     }
 
+    private getTaskIdFromLine(line: string): string | null {
+        return line.match(/<!-- task-id: ([a-z0-9]+) -->/)?.[1] || null
+    }
+
+    private generateUniqueTaskId(usedIds: Set<string>): string {
+        const { IdUtils } = require('../utils/idUtils')
+
+        let id = IdUtils.generateTimeBasedId()
+        while (usedIds.has(id)) {
+            id = IdUtils.generateTimeBasedId()
+        }
+
+        usedIds.add(id)
+        return id
+    }
+
+    /**
+     * Obsidian Tasks parses task metadata from right to left and stops on unknown
+     * text. Keeping our private HTML comment immediately after the checkbox means
+     * all Tasks metadata (recurrence, due date, scheduled date, etc.) remains to
+     * the right of our marker and can still be parsed normally.
+     */
+    public normalizeTaskLineForCompatibility(line: string): string {
+        const taskIdMatches = Array.from(line.matchAll(this.ID_PATTERN))
+        if (taskIdMatches.length === 0) return line
+
+        const taskIdText = taskIdMatches[0][0]
+        let withoutIds = line.replace(this.ID_PATTERN, '')
+
+        const checkboxMatch = withoutIds.match(/^(\s*- \[[ xX]\])(?:\s+|$)/)
+        if (!checkboxMatch) return line
+
+        let remainder = withoutIds.slice(checkboxMatch[0].length).trim()
+        remainder = remainder.replace(/[ \t]{2,}/g, ' ')
+
+        let normalized = `${checkboxMatch[1]} ${taskIdText}`
+        if (remainder) {
+            normalized += ` ${remainder}`
+        }
+
+        // Keep our reminder near the beginning too, but always after task-id so
+        // task-id stays the first token following the checkbox.
+        const reminderMatch = normalized.match(/🔔\s*(\d+)([mhd])/)
+        if (reminderMatch) {
+            const reminderText = reminderMatch[0]
+            const withoutReminder = normalized
+                .replace(reminderText, '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .trimEnd()
+
+            const anchorMatch = withoutReminder.match(
+                /^(\s*- \[[ xX]\]\s+<!-- task-id: [a-z0-9]+ -->)(?:\s+|$)/
+            )
+
+            if (anchorMatch) {
+                const rest = withoutReminder.slice(anchorMatch[0].length).trim()
+                normalized = `${anchorMatch[1]} ${reminderText}${rest ? ` ${rest}` : ''}`
+            }
+        }
+
+        return normalized
+    }
+
+    /**
+     * Normalize existing task IDs in the active editor. This is intentionally
+     * idempotent and also keeps the old line-break recovery behavior.
+     */
+    public normalizeTaskIdsInView(view: EditorView): boolean {
+        const doc = view.state.doc
+        const changes: { from: number, to: number, insert: string }[] = []
+
+        for (let i = 1; i <= doc.lines; i++) {
+            const line = doc.line(i)
+            const hasTaskId = /<!-- task-id: [a-z0-9]+ -->/.test(line.text)
+            const isTaskLine = /^\s*- \[[ xX]\]/.test(line.text)
+
+            // Recover an ID that was pushed onto its own line by an edit.
+            if (hasTaskId && !isTaskLine && i > 1) {
+                const idText = line.text.match(/<!-- task-id: [a-z0-9]+ -->/)?.[0]
+                const prevLine = doc.line(i - 1)
+                if (idText && /^\s*- \[[ xX]\]/.test(prevLine.text) &&
+                    !/<!-- task-id: [a-z0-9]+ -->/.test(prevLine.text)) {
+                    const updatedPrev = this.normalizeTaskLineForCompatibility(`${prevLine.text} ${idText}`)
+                    changes.push({ from: prevLine.from, to: prevLine.to, insert: updatedPrev })
+
+                    const cleanedCurrent = line.text.replace(idText, '').trim()
+                    changes.push({ from: line.from, to: line.to, insert: cleanedCurrent })
+                    continue
+                }
+            }
+
+            if (!isTaskLine || !hasTaskId) continue
+
+            let normalized = this.normalizeTaskLineForCompatibility(line.text)
+
+            // If a completed task is unticked, remove the stale completion date.
+            if (/^\s*- \[ \]/.test(normalized) && this.COMPLETION_PATTERN.test(normalized)) {
+                this.COMPLETION_PATTERN.lastIndex = 0
+                normalized = normalized
+                    .replace(this.COMPLETION_PATTERN, '')
+                    .replace(/[ \t]{2,}/g, ' ')
+                    .trimEnd()
+                normalized = this.normalizeTaskLineForCompatibility(normalized)
+            }
+            this.COMPLETION_PATTERN.lastIndex = 0
+
+            if (normalized !== line.text) {
+                changes.push({ from: line.from, to: line.to, insert: normalized })
+            }
+        }
+
+        if (changes.length > 0) {
+            view.dispatch({ changes })
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * Tasks creates the next recurring occurrence by copying the task text.
+     * That also copies our HTML task-id. Preserve the ID on a completed
+     * occurrence and assign fresh IDs to the other copies before auto-sync sees
+     * them.
+     */
+    public repairDuplicateTaskIdsInView(view: EditorView): boolean {
+        const doc = view.state.doc
+        const occurrences = new Map<string, Array<{
+            from: number
+            to: number
+            text: string
+            completed: boolean
+        }>>()
+
+        for (let i = 1; i <= doc.lines; i++) {
+            const line = doc.line(i)
+            if (!/^\s*- \[[ xX]\]/.test(line.text)) continue
+
+            const taskId = this.getTaskIdFromLine(line.text)
+            if (!taskId) continue
+
+            const entries = occurrences.get(taskId) || []
+            entries.push({
+                from: line.from,
+                to: line.to,
+                text: line.text,
+                completed: /^\s*- \[[xX]\]/.test(line.text)
+            })
+            occurrences.set(taskId, entries)
+        }
+
+        const usedIds = new Set<string>([
+            ...Object.keys(this.plugin.settings.taskMetadata),
+            ...occurrences.keys()
+        ])
+        const changes: { from: number, to: number, insert: string }[] = []
+
+        for (const [taskId, entries] of occurrences) {
+            if (entries.length < 2) continue
+
+            // For recurring tasks, the completed occurrence is the original
+            // task and must keep its ID/event association.
+            const completedIndex = entries.findIndex(entry => entry.completed)
+            const keeperIndex = completedIndex >= 0 ? completedIndex : 0
+
+            entries.forEach((entry, index) => {
+                if (index === keeperIndex) return
+
+                const newId = this.generateUniqueTaskId(usedIds)
+                const newIdText = `<!-- task-id: ${newId} -->`
+                const updatedLine = this.normalizeTaskLineForCompatibility(
+                    entry.text.replace(
+                        `<!-- task-id: ${taskId} -->`,
+                        newIdText
+                    )
+                )
+
+                changes.push({
+                    from: entry.from,
+                    to: entry.to,
+                    insert: updatedLine
+                })
+
+                LogUtils.debug(`Reassigned duplicate task ID ${taskId} -> ${newId}`)
+            })
+        }
+
+        if (changes.length > 0) {
+            view.dispatch({ changes })
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * One-time vault migration for IDs produced by older plugin versions.
+     * It runs before the plugin's auto-sync handlers are registered.
+     */
+    public async migrateTaskIdsForTasksCompatibility(): Promise<void> {
+        const currentVersion = this.plugin.settings.taskIdPositionMigrationVersion || 0
+        if (currentVersion >= this.TASK_ID_POSITION_MIGRATION_VERSION) return
+
+        let changedFiles = 0
+        let reassignedIds = 0
+        let failed = false
+        const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
+        this.modifyLock = true
+        try {
+            for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+                try {
+                    const content = await this.plugin.app.vault.read(file)
+                    if (!content.includes('<!-- task-id:')) continue
+
+                    const lines = content.split('\n')
+                    let fileChanged = false
+
+                    // First normalize the marker position on every tracked task.
+                    for (let i = 0; i < lines.length; i++) {
+                        if (!/^\s*- \[[ xX]\]/.test(lines[i]) ||
+                            !/<!-- task-id: [a-z0-9]+ -->/.test(lines[i])) {
+                            continue
+                        }
+
+                        const normalized = this.normalizeTaskLineForCompatibility(lines[i])
+                        if (normalized !== lines[i]) {
+                            lines[i] = normalized
+                            fileChanged = true
+                        }
+                    }
+
+                    // Then repair duplicate IDs, including copies left by a
+                    // recurring task completed before this fix was installed.
+                    const occurrences = new Map<string, number[]>()
+                    for (let i = 0; i < lines.length; i++) {
+                        if (!/^\s*- \[[ xX]\]/.test(lines[i])) continue
+                        const taskId = this.getTaskIdFromLine(lines[i])
+                        if (!taskId) continue
+
+                        usedIds.add(taskId)
+                        const indexes = occurrences.get(taskId) || []
+                        indexes.push(i)
+                        occurrences.set(taskId, indexes)
+                    }
+
+                    for (const [taskId, indexes] of occurrences) {
+                        if (indexes.length < 2) continue
+
+                        const completedIndex = indexes.findIndex(index =>
+                            /^\s*- \[[xX]\]/.test(lines[index])
+                        )
+                        const keeperOffset = completedIndex >= 0 ? completedIndex : 0
+
+                        indexes.forEach((lineIndex, offset) => {
+                            if (offset === keeperOffset) return
+
+                            const newId = this.generateUniqueTaskId(usedIds)
+                            lines[lineIndex] = this.normalizeTaskLineForCompatibility(
+                                lines[lineIndex].replace(
+                                    `<!-- task-id: ${taskId} -->`,
+                                    `<!-- task-id: ${newId} -->`
+                                )
+                            )
+                            reassignedIds++
+                            fileChanged = true
+                        })
+                    }
+
+                    if (fileChanged) {
+                        await this.plugin.app.vault.modify(file, lines.join('\n'))
+                        changedFiles++
+                    }
+                } catch (error) {
+                    failed = true
+                    LogUtils.error(`Failed to migrate task IDs in ${file.path}: ${error}`)
+                }
+            }
+
+            if (!failed) {
+                this.plugin.settings.taskIdPositionMigrationVersion =
+                    this.TASK_ID_POSITION_MIGRATION_VERSION
+                await this.plugin.saveSettings()
+            }
+
+            LogUtils.info(
+                `Tasks compatibility migration complete: ${changedFiles} files updated, ${reassignedIds} duplicate IDs reassigned`
+            )
+        } finally {
+            this.modifyLock = false
+        }
+    }
+
     private registerEditorHandlers() {
-        // Track edits and ensure IDs stay at end of lines
+        // Track edits and keep IDs in the Tasks-compatible position.
         this.plugin.registerEvent(
             this.plugin.app.workspace.on('editor-change', debounce((editor: Editor) => {
                 this.lastEditTime = Date.now()
-                this.ensureIdsAtEndOfLines(editor)
+                this.ensureIdsAfterCheckbox(editor)
+                this.repairDuplicateTaskIds(editor)
                 this.checkForNewTasks(editor)
                 this.handleTaskCompletionChanges(editor)
             }, 1000))
@@ -122,61 +417,32 @@ export class TokenController {
 
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
-            // Look for unchecked tasks with task IDs
-            if (line.text.match(/^\s*- \[ \].*?<!-- task-id: ([a-z0-9]+) -->/)) {
-                // Check if there are completion markers to clean up
-                const hasCompletionMarkers = line.text.match(this.COMPLETION_PATTERN)
+            if (!/^\s*- \[ \]/.test(line.text) ||
+                !/<!-- task-id: [a-z0-9]+ -->/.test(line.text)) {
+                continue
+            }
 
-                if (hasCompletionMarkers) {
-                    LogUtils.debug(`Found unticked task with completion markers: ${line.text}`)
+            this.COMPLETION_PATTERN.lastIndex = 0
+            if (!this.COMPLETION_PATTERN.test(line.text)) {
+                this.COMPLETION_PATTERN.lastIndex = 0
+                continue
+            }
+            this.COMPLETION_PATTERN.lastIndex = 0
 
-                    // Get task ID
-                    const idMatch = line.text.match(this.ID_PATTERN)
-                    const taskId = idMatch ? idMatch[1] : null
+            let newLine = line.text
+                .replace(this.COMPLETION_PATTERN, '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .trimEnd()
+            newLine = this.normalizeTaskLineForCompatibility(newLine)
 
-                    // Check for reminder
-                    const reminderMatch = line.text.match(/🔔\s*(\d+)([mhd])/)
-                    const reminderText = reminderMatch ? reminderMatch[0] : null
+            LogUtils.debug(`Cleaning completion marker from unticked task ${this.getTaskIdFromLine(line.text)}`)
 
-                    // Remove all completion markers from the line
-                    let newLine = line.text.replace(this.COMPLETION_PATTERN, '')
-                    // Clean up any extra whitespace
-                    newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                    // Ensure ID is at the end and reminder is at the beginning after checkbox
-                    // Remove the ID and reminder first
-                    if (taskId) {
-                        newLine = newLine.replace(this.ID_PATTERN, '')
-                    }
-                    if (reminderText) {
-                        newLine = newLine.replace(reminderText, '')
-                    }
-                    newLine = newLine.trim()
-
-                    // Find the position after the checkbox for reminder
-                    const checkboxMatch = newLine.match(/^(\s*- \[[ xX]\] )/)
-                    if (checkboxMatch) {
-                        // Add reminder after checkbox
-                        if (reminderText) {
-                            newLine = newLine.replace(checkboxMatch[0], checkboxMatch[0] + `${reminderText} `)
-                        }
-
-                        // Add ID at the end
-                        if (taskId) {
-                            newLine = newLine + ` <!-- task-id: ${taskId} -->`
-                        }
-                    }
-
-                    LogUtils.debug(`Cleaning up completion markers in unticked task: ${taskId}`)
-                    LogUtils.debug(`Original line: ${line.text}`)
-                    LogUtils.debug(`Updated line: ${newLine}`)
-
-                    changes.push({
-                        from: line.from,
-                        to: line.to,
-                        insert: newLine
-                    })
-                }
+            if (newLine !== line.text) {
+                changes.push({
+                    from: line.from,
+                    to: line.to,
+                    insert: newLine
+                })
             }
         }
 
@@ -200,172 +466,18 @@ export class TokenController {
         }
     }
 
-    private ensureIdsAtEndOfLines(editor: Editor) {
+    private ensureIdsAfterCheckbox(editor: Editor) {
         // @ts-ignore - cm exists on editor but is not typed
         const view = editor.cm as EditorView
         if (!view) return
+        this.normalizeTaskIdsInView(view)
+    }
 
-        const doc = view.state.doc
-        const changes: { from: number, to: number, insert: string }[] = []
-
-        for (let i = 1; i <= doc.lines; i++) {
-            const line = doc.line(i)
-            // Look for tasks with task IDs
-            const taskIdMatches = [...line.text.matchAll(this.ID_PATTERN)]
-
-            // Also look for reminders
-            const reminderMatch = line.text.match(/🔔\s*(\d+)([mhd])/)
-
-            // Handle task IDs that might be on wrong lines after line breaks
-            if (taskIdMatches.length > 0 && !line.text.match(/^.*?- \[[ x]\].*/)) {
-                // Found a task ID on a non-task line - move it to the previous task line
-                const taskId = taskIdMatches[0][0]
-                LogUtils.debug(`Found orphaned task ID on line ${i}: ${taskId}`)
-                
-                // Look for the previous task line
-                if (i > 1) {
-                    const prevLine = doc.line(i - 1)
-                    if (prevLine.text.match(/^.*?- \[[ x]\].*/) && !prevLine.text.match(this.ID_PATTERN)) {
-                        // Previous line is a task without an ID - move the ID there
-                        changes.push({
-                            from: prevLine.from,
-                            to: prevLine.to,
-                            insert: prevLine.text.trim() + ' ' + taskId
-                        })
-                        
-                        // Remove the ID from current line
-                        const cleanedLine = line.text.replace(this.ID_PATTERN, '').trim()
-                        if (cleanedLine) {
-                            changes.push({
-                                from: line.from,
-                                to: line.to,
-                                insert: cleanedLine
-                            })
-                        } else {
-                            // Line is empty after removing ID, remove the entire line
-                            changes.push({
-                                from: line.from - (i > 1 ? 1 : 0), // Include preceding newline if not first line
-                                to: line.to,
-                                insert: ''
-                            })
-                        }
-                        continue
-                    }
-                }
-            }
-
-            if (line.text.match(/^.*?- \[[ x]\].*/)) {
-                let needsUpdate = false
-                let newLine = line.text
-
-                // Handle IDs first - ensure they're at the end
-                if (taskIdMatches.length > 0) {
-                    // Check if there are multiple IDs (the issue)
-                    if (taskIdMatches.length > 1) {
-                        LogUtils.debug(`Found multiple task IDs in line: ${line.text}`)
-
-                        // Keep only the first ID
-                        const firstId = taskIdMatches[0][0]
-                        // Remove all IDs from the line
-                        newLine = newLine.replace(this.ID_PATTERN, '')
-                        // Clean up any extra whitespace
-                        newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                        // Add the ID at the end of the line
-                        newLine = newLine + ' ' + firstId
-                        needsUpdate = true
-                    }
-                    // If ID exists but is not at the end of the line
-                    else {
-                        const idMatch = taskIdMatches[0]
-                        const idText = idMatch[0]
-                        
-                        // Check if ID is already at the end (with optional whitespace)
-                        const isAtEnd = newLine.trim().endsWith(idText.trim())
-                        
-                        if (!isAtEnd) {
-                            // Remove the ID from its current position
-                            newLine = newLine.replace(idText, '')
-                            // Clean up any extra whitespace
-                            newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                            // Add the ID at the end of the line
-                            newLine = newLine + ' ' + idText
-                            needsUpdate = true
-                        }
-                    }
-                }
-
-                // Handle reminders - keep them near the beginning after the checkbox
-                if (reminderMatch) {
-                    const reminderText = reminderMatch[0]
-                    const reminderIndex = newLine.indexOf(reminderText)
-
-                    // Find the position after the checkbox
-                    const checkboxMatch = newLine.match(/^(\s*- \[[ xX]\] )/)
-                    if (checkboxMatch) {
-                        const insertPos = checkboxMatch[0].length
-
-                        // Only move if the reminder is not already near the beginning
-                        if (reminderIndex > insertPos + 10) { // Allow some flexibility
-                            // Remove the reminder from its current position
-                            newLine = newLine.replace(reminderText, '')
-                            // Clean up any extra whitespace
-                            newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                            // Insert the reminder after the checkbox
-                            newLine = newLine.replace(checkboxMatch[0], checkboxMatch[0] + reminderText + ' ')
-                            needsUpdate = true
-                        }
-                    }
-                }
-
-                // Check for unchecked tasks with completion markers
-                const isUnchecked = line.text.match(/^.*?- \[ \].*/)
-                if (isUnchecked) {
-                    const hasCompletionMarkers = line.text.match(this.COMPLETION_PATTERN)
-                    if (hasCompletionMarkers) {
-                        LogUtils.debug(`Found unticked task with completion markers during ID check: ${line.text}`)
-
-                        // Get the current ID
-                        const taskId = taskIdMatches.length > 0 ? taskIdMatches[0][1] : null
-
-                        // Create a new line without completion markers
-                        newLine = newLine.replace(this.COMPLETION_PATTERN, '')
-                        // Clean up any extra whitespace
-                        newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                        // Remove the ID temporarily
-                        newLine = newLine.replace(this.ID_PATTERN, '').trim()
-
-                        // Add the ID back at the end
-                        if (taskId) {
-                            const taskIdText = `<!-- task-id: ${taskId} -->`
-                            newLine = newLine + ' ' + taskIdText
-                        }
-
-                        LogUtils.debug(`Cleaning up completion markers in unticked task during ID check: ${taskId}`)
-                        LogUtils.debug(`Original line: ${line.text}`)
-                        LogUtils.debug(`Updated line: ${newLine}`)
-
-                        needsUpdate = true
-                    }
-                }
-
-                // Only push changes if we actually modified the line
-                if (needsUpdate && newLine !== line.text) {
-                    changes.push({
-                        from: line.from,
-                        to: line.to,
-                        insert: newLine
-                    })
-                }
-            }
-        }
-
-        if (changes.length > 0) {
-            view.dispatch({ changes })
-        }
+    private repairDuplicateTaskIds(editor: Editor) {
+        // @ts-ignore - cm exists on editor but is not typed
+        const view = editor.cm as EditorView
+        if (!view) return
+        this.repairDuplicateTaskIdsInView(view)
     }
 
     public getExtension(): Extension[] {
@@ -377,8 +489,22 @@ export class TokenController {
         const taskCreationPlugin = ViewPlugin.fromClass(class {
             private lastChangeTime = 0;
 
+            constructor(view: EditorView) {
+                // Migrate the currently opened note immediately, before the
+                // user can toggle an old recurring task.
+                setTimeout(() => {
+                    controller.normalizeTaskIdsInView(view);
+                    controller.repairDuplicateTaskIdsInView(view);
+                }, 0);
+            }
+
             update(update: ViewUpdate) {
                 if (!update.docChanged) return;
+
+                // Tasks can create the next recurring occurrence in the same
+                // transaction. Repair copied IDs before the sync debounce fires.
+                if (controller.normalizeTaskIdsInView(update.view)) return;
+                if (controller.repairDuplicateTaskIdsInView(update.view)) return;
 
                 const currentTime = Date.now();
                 if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
@@ -427,7 +553,7 @@ export class TokenController {
                     const newLineText = newStartLine.text;
 
                     // Check if the line had an ID (to ensure we're dealing with our tracked tasks)
-                    const taskIdMatch = newLineText.match(controller.ID_PATTERN);
+                    const taskIdMatch = newLineText.match(/<!-- task-id: ([a-z0-9]+) -->/);
                     if (!taskIdMatch) return;
 
                     const taskId = taskIdMatch[1];
@@ -455,24 +581,10 @@ export class TokenController {
                             // Clean up extra whitespace
                             cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
 
-                            // Ensure the ID is at the end and reminder is at the beginning after checkbox
-                            // Remove the ID and reminder
-                            cleanedLine = cleanedLine.replace(controller.ID_PATTERN, '').trim();
-                            if (reminderText) {
-                                cleanedLine = cleanedLine.replace(reminderText, '').trim();
-                            }
-
-                            // Find the position after the checkbox for reminder
-                            const checkboxMatch = cleanedLine.match(/^(\s*- \[[ xX]\] )/);
-                            if (checkboxMatch) {
-                                // Add reminder after checkbox
-                                if (reminderText) {
-                                    cleanedLine = cleanedLine.replace(checkboxMatch[0], checkboxMatch[0] + reminderText + ' ');
-                                }
-
-                                // Add ID at the end
-                                cleanedLine = cleanedLine + ' ' + taskIdMatch[0];
-                            }
+                            // Canonicalize the private ID immediately after the
+                            // checkbox. normalizeTaskLineForCompatibility also keeps
+                            // reminders directly after the ID.
+                            cleanedLine = controller.normalizeTaskLineForCompatibility(cleanedLine);
 
                             LogUtils.debug(`Original line: ${newLineText}`);
                             LogUtils.debug(`Cleaned line: ${cleanedLine}`);
@@ -660,7 +772,7 @@ export class TokenController {
                         }
 
                         // For line breaks within task content, let CodeMirror handle naturally
-                        // We'll fix the ID position in a post-processing step via the ensureIdsAtEndOfLines method
+                        // We'll fix the ID position in a post-processing step via normalizeTaskIdsInView
                         // This prevents the character duplication bug caused by conflicting transaction handling
 
                         // Always allow the line break to proceed naturally
@@ -789,21 +901,23 @@ export class TokenController {
             // Create the task ID
             const taskId = `<!-- task-id: ${id} -->`;
 
-            // Insert the ID at the end of the line
-            // This helps with tag parsing and general readability
-            let transaction;
+            // Insert immediately after the checkbox. Obsidian Tasks parses its
+            // metadata from right to left, so putting our unknown HTML comment
+            // at the end would hide recurrence/due-date metadata from Tasks.
+            const checkboxMatch = line.text.match(/^(\s*- \[[ xX]\])/);
+            if (!checkboxMatch) {
+                LogUtils.debug('Could not locate task checkbox');
+                return '';
+            }
 
-            // Find the end of the line
-            const insertPos = line.to;
-
-            // Insert the ID at the end of the task line
-            const changes = [{
-                from: insertPos,
-                to: insertPos,
-                insert: ` ${taskId}`
-            }];
-
-            transaction = view.state.update({ changes });
+            const insertPos = line.from + checkboxMatch[1].length;
+            const transaction = view.state.update({
+                changes: [{
+                    from: insertPos,
+                    to: insertPos,
+                    insert: ` ${taskId}`
+                }]
+            });
             view.dispatch(transaction);
 
             // Store metadata about this task
