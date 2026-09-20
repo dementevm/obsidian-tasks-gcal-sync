@@ -67,8 +67,8 @@ function validFiniteNumber(value: unknown, min: number, max: number): value is n
 
 export function decodeSetup(encoded: string): ShareableCalendarSetup {
     const json = new TextDecoder().decode(base64UrlToBytes(encoded));
-    const parsed = JSON.parse(json) as Partial<ShareableCalendarSetup> & {
-        version?: number;
+    const parsed = JSON.parse(json) as Omit<Partial<ShareableCalendarSetup>, 'version'> & {
+        version?: 1 | 2;
         oauthRedirectUri?: string; // ignored legacy v1 field
     };
 
