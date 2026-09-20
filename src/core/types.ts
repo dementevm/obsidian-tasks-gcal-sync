@@ -29,6 +29,7 @@ export interface Task {
     durationMinutes?: number;
     reminder?: number;
     kind?: 'task' | 'event';
+    timeZone?: string;
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -45,6 +46,7 @@ export interface TaskMetadata {
     durationMinutes?: number;
     reminder?: number;
     kind?: 'task' | 'event';
+    timeZone?: string;
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -77,7 +79,13 @@ export interface GoogleCalendarSettings {
     tokensEncrypted?: boolean; // Flag indicating tokens are stored encrypted
     syncEnabled: boolean;
     calendarId: string;
+    primaryCalendarConfirmed: boolean;
+    scanEntireVault: boolean;
+    /** Legacy reminder setting kept for migration. */
     defaultReminder: number;
+    defaultTimedTaskReminderMinutes: number;
+    defaultInformationalEventReminderMinutes: number;
+    allDayTaskRemindersEnabled: boolean;
     defaultEventDurationMinutes: number;
     defaultMorningEventTime: string;
     includeFolders: string[];
@@ -87,6 +95,7 @@ export interface GoogleCalendarSettings {
     hasCompletedOnboarding?: boolean;
     mobileSyncLimit?: number; // Limit number of files to search on mobile (default: 100)
     mobileOptimizations?: boolean; // Enable mobile-specific optimizations (default: true)
+    vaultSecretNamespace?: string;
     settingsSchemaVersion?: number;
 }
 
