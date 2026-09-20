@@ -494,8 +494,8 @@ export class TaskParser {
         let header = lines[0];
 
         // Remove task checkbox or informational-event prefix.
-        header = header.replace(/^- \[[xX ]\]\s*/, '');
-        header = header.replace(/^- 📆\s*/, '');
+        header = header.replace(/^\s*-\s+\[[xX ]\]\s*/, '');
+        header = header.replace(/^\s*-\s+📆\s*/, '');
 
         // Process date, time, and other markers with consistent spacing
         // This helps prevent data corruption and ensures consistent format
