@@ -731,9 +731,52 @@ export class TokenController {
             }
         });
 
+        const buildTaskIdDecorations = (state: EditorState): DecorationSet => {
+            const builder = new RangeSetBuilder<Decoration>()
+            const decorations: Array<{
+                from: number,
+                to: number,
+                decoration: Decoration
+            }> = []
+
+            for (let pos = 0; pos < state.doc.length;) {
+                const line = state.doc.lineAt(pos)
+                let match
+
+                idPattern.lastIndex = 0
+                while ((match = idPattern.exec(line.text)) !== null) {
+                    const from = line.from + match.index
+                    const to = from + match[0].length
+
+                    decorations.push({
+                        from,
+                        to,
+                        decoration: Decoration.replace({
+                            widget: new ZeroWidthWidget(match[0]),
+                            block: false,
+                            side: 1
+                        })
+                    })
+                }
+
+                pos = line.to + 1
+            }
+
+            decorations.sort((a, b) => a.from - b.from)
+            for (const { from, to, decoration } of decorations) {
+                builder.add(from, to, decoration)
+            }
+
+            return builder.finish()
+        }
+
         const taskIdField = StateField.define<DecorationSet>({
-            create() {
-                return Decoration.none
+            create(state) {
+                // Build replacements immediately when a note is opened. Waiting
+                // for the first editor transaction leaves raw task-id comments
+                // visible on clients (notably iOS) that do not dispatch an
+                // initialization transaction.
+                return buildTaskIdDecorations(state)
             },
             update(oldSet, tr) {
                 // Only prevent standalone deletion of task IDs
@@ -753,46 +796,7 @@ export class TokenController {
                     }
                 }
 
-                const builder = new RangeSetBuilder<Decoration>()
-                const decorations: Array<{
-                    from: number,
-                    to: number,
-                    decoration: Decoration
-                }> = []
-
-                // First collect all decorations
-                for (let pos = 0; pos < tr.state.doc.length;) {
-                    const line = tr.state.doc.lineAt(pos)
-                    let match
-
-                    idPattern.lastIndex = 0
-                    while ((match = idPattern.exec(line.text)) !== null) {
-                        const from = line.from + match.index
-                        const to = from + match[0].length
-
-                        // Replace the ID with a widget and make it atomic
-                        decorations.push({
-                            from,
-                            to,
-                            decoration: Decoration.replace({
-                                widget: new ZeroWidthWidget(match[0]),
-                                block: false,
-                                side: 1  // Changed to 1 to prefer end of line
-                            })
-                        })
-                    }
-                    pos = line.to + 1
-                }
-
-                // Sort decorations by position
-                decorations.sort((a, b) => a.from - b.from)
-
-                // Add sorted decorations to builder
-                for (const { from, to, decoration } of decorations) {
-                    builder.add(from, to, decoration)
-                }
-
-                return builder.finish()
+                return buildTaskIdDecorations(tr.state)
             },
             provide: f => EditorView.decorations.from(f)
         })
