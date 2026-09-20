@@ -19,6 +19,7 @@ class ZeroWidthWidget extends WidgetType {
 
     toDOM() {
         const wrap = document.createElement('span')
+        wrap.className = 'tasks-gcal-sync-task-id'
         wrap.setAttribute('aria-hidden', 'true')
         return wrap
     }
