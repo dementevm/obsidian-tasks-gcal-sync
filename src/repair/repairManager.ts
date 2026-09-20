@@ -147,7 +147,19 @@ export class RepairManager {
                 try {
                     // Clear existing queue
                     store.clearSyncQueue();
-                    const taskArray = Array.from(tasks.values());
+                    const currentCalendarId = this.plugin.settings.calendarId.trim();
+                    const taskArray = Array.from(tasks.values()).filter(task => {
+                        if (!task.id) return false;
+                        const binding = this.plugin.settings.taskMetadata[task.id]?.calendarId;
+                        if (binding && binding !== currentCalendarId) {
+                            processed.add(task.id);
+                            LogUtils.debug(
+                                `Skipping task ${task.id} during repair: bound to calendar ${binding}, current target is ${currentCalendarId}`
+                            );
+                            return false;
+                        }
+                        return true;
+                    });
                     
                     // Group tasks into those with existing events and those without
                     const tasksWithEvents: Task[] = [];
@@ -206,7 +218,7 @@ export class RepairManager {
                                 const event = eventsByTaskId.get(task.id);
                                 if (event && this.plugin.calendarSync) {
                                     // Delete the event
-                                    await this.plugin.calendarSync.deleteEvent(event.id, task.id);
+                                    await this.plugin.calendarSync.deleteEvent(event.id, task.id, currentCalendarId);
                                     LogUtils.debug(`Deleted event ${event.id} for completed task ${task.id}`);
                                     
                                     // Clean up metadata
@@ -244,7 +256,13 @@ export class RepairManager {
                                 try {
                                     // Force create new event
                                     if (this.plugin.calendarSync) {
-                                        const eventId = await this.plugin.calendarSync.createEvent(task);
+                                        const eventId = await this.plugin.calendarSync.createEvent(task, currentCalendarId);
+                                        this.plugin.calendarSync.updateTaskMetadata(
+                                            task,
+                                            eventId,
+                                            this.plugin.settings.taskMetadata[task.id],
+                                            currentCalendarId
+                                        );
                                         processed.add(task.id);
                                         return { taskId: task.id, eventId, success: true };
                                     }
@@ -430,7 +448,11 @@ export class RepairManager {
                         let allDeletesSucceeded = true;
                         for (const event of events) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(event.id, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    event.id,
+                                    taskId,
+                                    this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted orphaned event ${event.id} for task ${taskId}`);
                             } catch (error) {
                                 LogUtils.error(`Failed to delete orphaned event ${event.id}:`, error);
@@ -455,7 +477,11 @@ export class RepairManager {
                         // Delete all but the most recent event
                         for (let i = 1; i < sortedEvents.length; i++) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(sortedEvents[i].id, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    sortedEvents[i].id,
+                                    taskId,
+                                    this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted duplicate event ${sortedEvents[i].id} for task ${taskId}`);
                             } catch (error) {
                                 LogUtils.error(`Failed to delete duplicate event ${sortedEvents[i].id}:`, error);
@@ -467,7 +493,8 @@ export class RepairManager {
                         if (metadata) {
                             this.plugin.settings.taskMetadata[taskId] = {
                                 ...metadata,
-                                eventId: sortedEvents[0].id
+                                eventId: sortedEvents[0].id,
+                                calendarId: this.plugin.settings.calendarId.trim()
                             };
                             await this.plugin.saveSettings();
                         }
@@ -514,7 +541,11 @@ export class RepairManager {
                         // If event still exists, delete it first
                         if (taskMetadata.eventId) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(taskMetadata.eventId, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    taskMetadata.eventId,
+                                    taskId,
+                                    taskMetadata.calendarId || this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted orphaned event ${taskMetadata.eventId} for task ${taskId}`);
                                 // Only delete metadata after successful event deletion
                                 delete metadata[taskId];
