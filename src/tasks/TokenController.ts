@@ -600,7 +600,7 @@ export class TokenController {
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
             if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
-                LogUtils.debug(`Found new task at line ${i}: ${line.text}`)
+                LogUtils.debug(`Found new sync item at line ${i}`)
                 this.generateTaskId(view, line.from)
             }
         }
@@ -709,9 +709,6 @@ export class TokenController {
                             cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
 
                             cleanedLine = controller.normalizeSyncItemLineForTasksCompatibility(cleanedLine);
-
-                            LogUtils.debug(`Original line: ${newLineText}`);
-                            LogUtils.debug(`Cleaned line: ${cleanedLine}`);
 
                             // Apply the change
                             update.view.dispatch({
@@ -865,17 +862,12 @@ export class TokenController {
                             const taskId = idMatch[1];
                             LogUtils.debug(`Task line deletion detected for task ${taskId}`);
 
-                            // Schedule task cleanup asynchronously with a short delay
-                            // to ensure the edit completes first
-                            setTimeout(() => {
-                                try {
-                                    const metadata = this.plugin.settings.taskMetadata[taskId];
-                                    this.plugin.handleTaskDeletion(taskId, metadata?.eventId)
-                                        .catch(error => LogUtils.error(`Error cleaning up deleted task ${taskId}: ${error}`));
-                                } catch (error) {
-                                    LogUtils.error(`Error scheduling task deletion for ${taskId}: ${error}`);
-                                }
-                            }, 100);
+                            // Defer remote deletion and verify the item did not
+                            // move to another in-scope file (cut/paste, rename, LiveSync).
+                            const metadata = this.plugin.settings.taskMetadata[taskId];
+                            if (metadata?.filePath) {
+                                this.scheduleMissingItemDeletion(taskId, metadata.filePath);
+                            }
                         }
                     }
                     return; // Always allow line deletions
@@ -1015,9 +1007,7 @@ export class TokenController {
                 LogUtils.error('No active file found');
                 return '';
             }
-
-            LogUtils.debug('Generating ID for line:', line.text);
-
+            LogUtils.debug('Generating ID for calendar-tracked line');
             // Check if line already has an ID
             if (line.text.match(this.ID_PATTERN)) {
                 LogUtils.debug('Line already has an ID');
