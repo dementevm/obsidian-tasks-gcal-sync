@@ -348,8 +348,10 @@ export const store = createStore<TaskStore>()(
                                 // Check for specific conditions that would cause us to skip enqueueing
                                 const metadata = state.plugin.settings.taskMetadata?.[task.id];
 
-                                // Skip if the task was just synced
-                                if (metadata?.justSynced && metadata.syncTimestamp) {
+                                // A completion must never be suppressed by the
+                                // anti-duplicate cooldown. Completed recurring
+                                // occurrences need to delete their old calendar event.
+                                if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                     const syncAge = Date.now() - metadata.syncTimestamp;
                                     if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
                                         LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping redundant enqueue`);
