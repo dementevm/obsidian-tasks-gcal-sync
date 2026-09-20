@@ -1,6 +1,6 @@
 {
   "name": "tasks-gcal-sync",
-  "version": "0.2.7",
+  "version": "1.0.0",
   "description": "Privacy-first one-way sync from Obsidian Tasks to Google Calendar",
   "main": "main.js",
   "scripts": {
