@@ -28,7 +28,7 @@ export interface GoogleCalendarEvent {
     };
 }
 
-export type RepairPhase = 'init' | 'delete' | 'metadata';
+export type RepairPhase = 'init' | 'delete' | 'metadata' | 'create' | 'update';
 
 export interface RepairProgress {
     phase: RepairPhase;
@@ -46,6 +46,8 @@ export const RepairOperations = {
     INIT: 'Initializing repair',
     CLEANUP_EVENTS: 'Cleaning up orphaned events',
     CLEANUP_METADATA: 'Cleaning up orphaned metadata',
+    CREATE: 'Creating missing events',
+    UPDATE: 'Processing existing events',
 } as const;
 
 export interface RepairResult {
@@ -87,4 +89,6 @@ export const RepairPhases: Record<RepairPhase, RepairPhase> = {
     init: 'init',
     delete: 'delete',
     metadata: 'metadata',
+    create: 'create',
+    update: 'update',
 } as const;
