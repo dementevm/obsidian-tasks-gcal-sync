@@ -353,8 +353,9 @@ export const store = createStore<TaskStore>()(
                                 // occurrences need to delete their old calendar event.
                                 if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                     const syncAge = Date.now() - metadata.syncTimestamp;
-                                    if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
-                                        LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping redundant enqueue`);
+                                    const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                    if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                        LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago and is unchanged; skipping redundant enqueue`);
                                         return;
                                     }
                                 }
@@ -619,8 +620,9 @@ export const store = createStore<TaskStore>()(
                             const metadata = state.plugin.settings.taskMetadata[task.id];
                             if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
-                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
-                                    LogUtils.debug(`Skipping task ${task.id} that was just synced ${syncAge}ms ago`);
+                                const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                    LogUtils.debug(`Skipping unchanged task ${task.id} that was just synced ${syncAge}ms ago`);
                                     state.removeFromSyncQueue(task.id);
                                     return false;
                                 }
