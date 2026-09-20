@@ -3,7 +3,7 @@ name: Release Obsidian Plugin
 on:
   push:
     tags:
-      - "v*"
+      - "*"
 
 permissions:
   contents: write
@@ -20,6 +20,16 @@ jobs:
           node-version: '22.x'
           cache: npm
 
+      - name: Verify tag matches manifest version
+        shell: bash
+        run: |
+          version="$(node -p "require('./manifest.json').version")"
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$tag" != "$version" ]; then
+            echo "Release tag '$tag' must exactly match manifest version '$version'."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
@@ -28,9 +38,9 @@ jobs:
 
       - name: Create release bundle
         run: |
-          mkdir obsidian-tasks-gcal-sync
-          cp main.js manifest.json styles.css README.md LICENSE obsidian-tasks-gcal-sync/
-          zip -r obsidian-tasks-gcal-sync.zip obsidian-tasks-gcal-sync
+          mkdir tasks-gcal-sync
+          cp main.js manifest.json styles.css README.md LICENSE NOTICE tasks-gcal-sync/
+          zip -r tasks-gcal-sync.zip tasks-gcal-sync
 
       - name: Create GitHub release
         env:
@@ -40,4 +50,4 @@ jobs:
           gh release create "$tag" \
             --title="$tag" \
             --generate-notes \
-            obsidian-tasks-gcal-sync.zip main.js manifest.json styles.css
+            tasks-gcal-sync.zip main.js manifest.json styles.css
