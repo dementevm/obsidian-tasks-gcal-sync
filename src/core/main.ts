@@ -55,8 +55,11 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // Initialize TaskParser first
             this.taskParser = new TaskParser(this);
 
-            // Initialize auth manager and await token loading
+            // Initialize auth manager and migrate device-local OAuth secrets into
+            // deterministic per-vault SecretStorage slots.
             this.authManager = new GoogleAuthManager(this);
+            this.authManager.migrateClientSecretToVaultScope();
+            await this.saveSettings();
 
             // Register protocol handler for mobile OAuth
             this.registerObsidianProtocolHandler('auth/gcalsync', async (params) => {
