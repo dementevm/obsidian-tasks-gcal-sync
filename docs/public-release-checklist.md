@@ -108,6 +108,7 @@ The detailed, reproducible checklist is maintained in [smoke-test.md](smoke-test
 - [x] Restart/Auto-sync persistence.
 - [x] Diagnostics and Cancel are non-destructive.
 - [x] Final duplicate/orphan audit for newly created smoke-test items.
+- [x] Repository freshness regression smoke after config/CSS/ID cleanup, including desktop ↔ iOS editing.
 
 Legacy private-build migration is manual: back up/copy the old data.json if needed and configure device-local OAuth secrets again. It is not an automatic migration path and is not a blocker for a clean first public release.
 
