@@ -38,6 +38,7 @@ export class TokenController {
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
     private readonly fileRepairPromises = new Map<string, Promise<boolean>>()
     private readonly pendingDeletionTimers = new Map<string, number>()
+    private readonly pendingViewReconciliations = new WeakSet<EditorView>()
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -613,6 +614,27 @@ export class TokenController {
         this.normalizeTaskIdsInView(view)
     }
 
+    /**
+     * CodeMirror does not allow EditorView.dispatch() while ViewPlugin.update()
+     * is running. Defer hidden-ID normalization until the current update stack
+     * has completed, and coalesce nested updates caused by our own dispatches.
+     */
+    private scheduleViewReconciliation(view: EditorView): void {
+        if (this.pendingViewReconciliations.has(view)) return
+        this.pendingViewReconciliations.add(view)
+
+        window.setTimeout(() => {
+            try {
+                this.normalizeTaskIdsInView(view)
+                this.ensureUniqueTaskIdsInView(view)
+            } catch (error) {
+                LogUtils.error(`Deferred editor reconciliation failed: ${error}`)
+            } finally {
+                this.pendingViewReconciliations.delete(view)
+            }
+        }, 0)
+    }
+
     public getExtension(): Extension[] {
         const idPattern = this.ID_PATTERN;
         const plugin = this.plugin;
@@ -623,20 +645,15 @@ export class TokenController {
             private lastChangeTime = 0;
 
             constructor(view: EditorView) {
-                setTimeout(() => {
-                    controller.normalizeTaskIdsInView(view);
-                    controller.ensureUniqueTaskIdsInView(view);
-                }, 0);
+                controller.scheduleViewReconciliation(view);
             }
 
             update(update: ViewUpdate) {
                 if (!update.docChanged) return;
 
-                // Obsidian Tasks can create the next recurrence by copying the
-                // entire task line, including our hidden ID. Fix placement and
-                // atomically reassign copied IDs before auto-sync sees them.
-                if (controller.normalizeTaskIdsInView(update.view)) return;
-                if (controller.ensureUniqueTaskIdsInView(update.view)) return;
+                // Any operation that dispatches a follow-up transaction must
+                // happen after this ViewPlugin.update() callback has returned.
+                controller.scheduleViewReconciliation(update.view);
 
                 const currentTime = Date.now();
                 if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
@@ -986,8 +1003,7 @@ export class TokenController {
             atomicRanges,
             preventDeletion,
             calendarShortcutExpander,
-            taskCreationPlugin,
-            taskCompletionPlugin
+            taskCreationPlugin
         ];
     }
 
