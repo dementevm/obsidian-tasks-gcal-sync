@@ -2,7 +2,7 @@
 
 One-way, privacy-focused synchronization from dated Obsidian Tasks and lightweight calendar reminders to Google Calendar.
 
-> **Status:** preparing for a public Community Plugins release. The plugin is functional on desktop and mobile, but the official Obsidian directory submission still requires public upstream-fork approval and a public release repository.
+> **Status:** release candidate. The current build has completed the desktop, iOS, LiveSync, OAuth, recurrence, scope-safety, restart and diagnostics smoke test. The official Obsidian Community Plugins submission still requires a public repository/release and completion of Obsidian's fork-policy process.
 
 ## Why this project exists
 
@@ -92,6 +92,8 @@ Type `@` in a Markdown list item:
 - `@dur` → `⏱`
 - `@end` → `➡️`
 
+Shortcuts can be entered while editing an existing tracked line, including after an existing date such as `📅 2026-09-21 @time`. Calendar-only metadata is normalized without moving the editing cursor.
+
 There is also a **Tasks GCal: Create calendar reminder** command that inserts a `📆` item using a small form.
 
 ### Time-zone preservation
@@ -105,6 +107,8 @@ For example, an event created while your phone is in `Asia/Seoul` keeps that zon
 A dedicated calendar such as **Obsidian Tasks** is strongly recommended.
 
 Using `primary` is supported, but requires an explicit local confirmation. That confirmation is deliberately not transferred through setup links.
+
+**Calendar binding is per tracked item.** The Calendar ID setting is the default target for newly created items. Once an item has been synchronized, its metadata remembers both the Google event ID and the calendar that owns it. Changing the default Calendar ID does not migrate or copy existing items: edits and deletes continue to target the calendar where that item was originally created.
 
 ### Controlled vault scanning
 
@@ -184,7 +188,7 @@ Setup links intentionally exclude secrets, OAuth tokens, task metadata, primary-
 The plugin uses the network only for Google authorization/calendar operations and the static redirect bridge:
 
 - `https://accounts.google.com` — Google OAuth authorization
-- `https://oauth2.googleapis.com` — token exchange, refresh, and revocation
+- `https://oauth2.googleapis.com` — token exchange and refresh
 - `https://www.googleapis.com/calendar/v3` — Google Calendar API
 - `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/` — static OAuth redirect bridge
 
@@ -284,7 +288,7 @@ https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/
 ```
 
 5. Configure the folders you want to sync, or explicitly enable **Scan Entire Vault**.
-6. Click **Connect to Google**.
+6. Click the plugin's calendar icon in the left ribbon, or click the `GCal: Disconnected` status item, to start Google authorization.
 7. Complete Google's authorization flow.
 
 The plugin requests offline access so that it can refresh access tokens without asking you to authenticate every time.
@@ -297,9 +301,11 @@ For each additional desktop/iPhone/iPad:
 
 1. install/sync the plugin;
 2. create/select the Client Secret entry in SecretStorage on that device;
-3. run **Connect to Google** once.
+3. start Google authorization from the ribbon/status item once on that device.
 
 You can use **Copy Setup Link** to transfer non-secret configuration between devices.
+
+Each device keeps its own local OAuth session. **Disconnect Google Calendar on this device** clears only that device's local credentials; it does not revoke the shared Google OAuth grant and therefore does not sign other devices out. If Google rejects an access token with HTTP 401, the plugin performs one local refresh-token recovery attempt before asking for a reconnect.
 
 ## Installation
 
@@ -311,19 +317,24 @@ Once accepted, installation will be available through **Settings → Community p
 
 ### Manual installation
 
-Build or download a release and place these files in:
+The easiest manual installation is to download `tasks-gcal-sync-<version>.zip` from a GitHub Release and extract its `tasks-gcal-sync` folder into:
+
+```text
+<vault>/.obsidian/plugins/
+```
+
+The resulting directory should be:
 
 ```text
 <vault>/.obsidian/plugins/tasks-gcal-sync/
+├── main.js
+├── manifest.json
+└── styles.css
 ```
 
-Required files:
+Alternatively, download the three release files individually or build from source. Reload Obsidian and enable **Tasks Google Calendar Sync**.
 
-- `main.js`
-- `manifest.json`
-- `styles.css`
-
-Reload Obsidian and enable **Tasks Google Calendar Sync**.
+Every push/PR is also built by GitHub Actions and exposes a short-lived installable artifact for testing. Tagged releases publish the ZIP plus `main.js`, `manifest.json`, and `styles.css` automatically.
 
 ### Existing private-build users
 
@@ -361,16 +372,20 @@ Imported setup links are validated and cannot replace the plugin's canonical OAu
 ## Sync behavior
 
 - Obsidian is authoritative.
+- The configured Calendar ID is the default for **new** tracked items; existing items remain bound to the calendar stored in their metadata even if the default changes.
 - Removing `📅` from a tracked line stops calendar tracking and removes its managed event.
 - Deleting a tracked line schedules a delayed verification before the Google event is removed, so normal cut/move/LiveSync operations are not treated as immediate deletions.
 - Per-task duplicate reconciliation may occur during sync.
 - Generic orphan cleanup requires an explicit Diagnostics action.
 - Google events created by the plugin contain private extended properties linking them to their Obsidian task ID.
 
-## Building from source
+## Building and CI
+
+Local build:
 
 ```bash
 npm ci
+npm audit
 npm run build
 ```
 
@@ -380,7 +395,11 @@ The release files are:
 - `manifest.json`
 - `styles.css`
 
-Release tags must exactly match `manifest.json` and use strict `x.y.z` Semantic Versioning, for example `0.2.7` — not `v0.2.7`.
+GitHub Actions runs the same clean install, audit, version consistency checks and production build on every push/PR. It also creates an installable ZIP artifact containing a `tasks-gcal-sync/` directory.
+
+A tag matching strict `x.y.z` Semantic Versioning triggers the release workflow. The workflow refuses to publish if the tag, `package.json`, `manifest.json`, and `versions.json` disagree. Release tags must not use a `v` prefix: use `1.0.0`, not `v1.0.0`.
+
+The full release regression checklist is in [`docs/smoke-test.md`](docs/smoke-test.md), with repository/publication gates in [`docs/public-release-checklist.md`](docs/public-release-checklist.md).
 
 ## Known limitations
 
@@ -388,7 +407,8 @@ Release tags must exactly match `manifest.json` and use strict `x.y.z` Semantic 
 - Google-side edits are overwritten by later Obsidian sync;
 - recurrence is handled by Obsidian Tasks rather than Google recurring events;
 - each device must be authorized separately;
-- the configured Calendar must be owned by the authenticated Google user because the plugin deliberately uses the narrower `calendar.events.owned` OAuth scope.
+- changing the default Calendar ID does not bulk-migrate existing managed events between calendars;
+- the target Calendar must be owned by the authenticated Google user because the plugin deliberately uses the narrower `calendar.events.owned` OAuth scope.
 
 ## Security
 
