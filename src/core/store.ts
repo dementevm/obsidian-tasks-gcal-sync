@@ -375,7 +375,7 @@ export const store = createStore<TaskStore>()(
 
                                 // Always add to queue - we'll deduplicate later when processing
                                 // This ensures changes made during processing aren't missed
-                                LogUtils.debug(`Enqueueing task ${task.id} with title='${task.title}', reminder=${task.reminder}`);
+                                LogUtils.debug(`Enqueueing calendar item ${task.id}`);
                                 state.syncQueue.add(task.id);
                                 validTaskIds.push(task.id);
 
@@ -573,7 +573,7 @@ export const store = createStore<TaskStore>()(
                                     }
                                 }
                             } catch (error) {
-                                LogUtils.error(`Failed to process file ${filePath}:`, error);
+                                LogUtils.error('Failed to process an in-scope Markdown file:', error);
                             }
                         }
 
@@ -1169,7 +1169,7 @@ export const store = createStore<TaskStore>()(
 
                         return content;
                     } catch (error) {
-                        LogUtils.error(`Failed to read file ${filePath}:`, error);
+                        LogUtils.error('Failed to read an in-scope Markdown file:', error);
                         throw error;
                     }
                 },
@@ -1200,7 +1200,7 @@ export const store = createStore<TaskStore>()(
                             });
                         });
                     } catch (error) {
-                        LogUtils.error(`Failed to update file cache for ${filePath}:`, error);
+                        LogUtils.error('Failed to update Markdown file cache:', error);
                     }
                 },
 
@@ -1269,7 +1269,7 @@ export const store = createStore<TaskStore>()(
                         // parsed fresh data from files, and editor handlers parse at the cursor line.
                         // Re-fetching here added 200ms+ of latency per task with no practical benefit
                         // since the debounce window already coalesces rapid edits.
-                        LogUtils.debug(`Syncing task ${task.id} with title='${task.title}', date=${task.date}, reminder=${task.reminder}`);
+                        LogUtils.debug(`Syncing calendar item ${task.id}`);
 
                         // Sync the task with calendar
                         await state.plugin.calendarSync?.syncTask(task);
