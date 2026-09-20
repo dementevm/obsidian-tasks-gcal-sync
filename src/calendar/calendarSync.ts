@@ -71,19 +71,19 @@ export class CalendarSync {
         this.plugin = plugin;
     }
 
-    private validateCalendarTarget(): void {
-        const calendarId = this.plugin.settings.calendarId?.trim();
+    private validateCalendarTarget(calendarIdOverride?: string): string {
+        const calendarId = (calendarIdOverride ?? this.plugin.settings.calendarId)?.trim();
         if (!calendarId) {
             throw new Error('Calendar ID is not configured.');
         }
         if (calendarId === 'primary' && !this.plugin.settings.primaryCalendarConfirmed) {
             throw new Error('Primary calendar use has not been explicitly confirmed.');
         }
+        return calendarId;
     }
 
-    private getCalendarEventsEndpoint(eventId?: string): string {
-        this.validateCalendarTarget();
-        const calendarId = encodeURIComponent(this.plugin.settings.calendarId.trim());
+    private getCalendarEventsEndpoint(eventId?: string, calendarIdOverride?: string): string {
+        const calendarId = encodeURIComponent(this.validateCalendarTarget(calendarIdOverride));
         return eventId
             ? `/calendars/${calendarId}/events/${encodeURIComponent(eventId)}`
             : `/calendars/${calendarId}/events`;
@@ -155,10 +155,11 @@ export class CalendarSync {
         }
     }
 
-    public async deleteEvent(eventId: string, taskId?: string): Promise<void> {
+    public async deleteEvent(eventId: string, taskId?: string, calendarId?: string): Promise<void> {
+        const targetCalendarId = this.validateCalendarTarget(calendarId);
         const operation = async () => {
             try {
-                await this.makeRequest(this.getCalendarEventsEndpoint(eventId), 'DELETE');
+                await this.makeRequest(this.getCalendarEventsEndpoint(eventId, targetCalendarId), 'DELETE');
                 LogUtils.debug(`Successfully deleted event: ${eventId}`);
             } catch (error) {
                 // If the event is already gone (410) or not found (404), consider it a success
@@ -179,16 +180,18 @@ export class CalendarSync {
 
         if (taskId) {
             // Use a single composite lock key instead of nested locks to prevent deadlocks
-            return this.withLock(`task:${taskId}:event:${eventId}`, operation);
+            return this.withLock(`calendar:${targetCalendarId}:task:${taskId}:event:${eventId}`, operation);
         } else {
             // If no taskId, just lock the event
-            return this.withLock(`event:${eventId}`, operation);
+            return this.withLock(`calendar:${targetCalendarId}:event:${eventId}`, operation);
         }
     }
 
     public async updateEvent(task: Task, eventId: string): Promise<void> {
+        const metadata = this.plugin.settings.taskMetadata[task.id];
+        const targetCalendarId = this.validateCalendarTarget(metadata?.calendarId);
         // Use a single composite lock key instead of nested locks to prevent deadlocks
-        return this.withLock(`task:${task.id}:event:${eventId}`, async () => {
+        return this.withLock(`calendar:${targetCalendarId}:task:${task.id}:event:${eventId}`, async () => {
             try {
                 if (!task.id) {
                     throw new Error('Cannot update event for task without ID');
@@ -196,24 +199,19 @@ export class CalendarSync {
 
                 // Check if the event still exists and is valid
                 const metadata = this.plugin.settings.taskMetadata[task.id];
-                const currentCalendarId = this.plugin.settings.calendarId.trim();
-                if (!metadata ||
-                    metadata.eventId !== eventId ||
-                    metadata.calendarId !== currentCalendarId) {
-                    LogUtils.debug(
-                        `Event ${eventId} is not associated with task ${task.id} in calendar ${currentCalendarId}, skipping direct update`
-                    );
+                if (!metadata || metadata.eventId !== eventId) {
+                    LogUtils.debug(`Event ${eventId} is no longer associated with task ${task.id}, skipping direct update`);
                     return;
                 }
 
                 const event = this.createEventFromTask(task);
-                await this.makeRequest(this.getCalendarEventsEndpoint(eventId), 'PUT', event);
+                await this.makeRequest(this.getCalendarEventsEndpoint(eventId, targetCalendarId), 'PUT', event);
                 LogUtils.debug(`Updated event ${eventId} for task ${task.id}`);
 
                 const updatedMetadata = {
                     ...metadata,
                     eventId,
-                    calendarId: this.plugin.settings.calendarId.trim(),
+                    calendarId: targetCalendarId,
                     title: task.title,
                     date: task.date,
                     time: task.time,
@@ -284,10 +282,10 @@ export class CalendarSync {
         return promise;
     }
 
-    private async cleanupExistingEvents(taskId: string): Promise<string | undefined> {
+    private async cleanupExistingEvents(taskId: string, calendarId: string): Promise<string | undefined> {
         try {
             // Use cached events for better performance
-            const events = await this.findAllObsidianEvents();
+            const events = await this.findAllObsidianEvents({ calendarId });
             const taskEvents = events.filter(event =>
                 event.extendedProperties?.private?.obsidianTaskId === taskId
             );
@@ -296,8 +294,7 @@ export class CalendarSync {
 
             // Check metadata first
             const metadata = this.plugin.settings.taskMetadata[taskId];
-            const currentCalendarId = this.plugin.settings.calendarId.trim();
-            if (metadata?.eventId && metadata.calendarId === currentCalendarId) {
+            if (metadata?.eventId && metadata.calendarId === calendarId) {
                 // If we have metadata, find that specific event
                 const metadataEvent = taskEvents.find(e => e.id === metadata.eventId);
                 if (metadataEvent) {
@@ -305,7 +302,7 @@ export class CalendarSync {
                     const duplicates = taskEvents.filter(e => e.id !== metadata.eventId);
                     if (duplicates.length > 0) {
                         LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${taskId}`);
-                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId)));
+                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId, calendarId)));
                     }
                     return metadata.eventId;
                 }
@@ -320,7 +317,7 @@ export class CalendarSync {
                 // Delete duplicates if any
                 if (duplicates.length > 0) {
                     LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${taskId}`);
-                    await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId)));
+                    await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId, calendarId)));
                 }
 
                 return keepEvent.id;
@@ -354,26 +351,23 @@ export class CalendarSync {
                 // by processSyncQueue or the editor change handler. Re-fetching here
                 // added ~100ms latency per task with no benefit.
 
-                // Get metadata and check for existing events
+                // Existing tasks stay bound to the calendar where their event
+                // was first created. The global Calendar ID is only the target for
+                // tasks that do not yet have a calendar binding.
                 const metadata = this.plugin.settings.taskMetadata[task.id];
+                const targetCalendarId = this.validateCalendarTarget(
+                    metadata?.calendarId || this.plugin.settings.calendarId
+                );
 
                 // Only log task data once per sync operation
-                LogUtils.debug(`Processing calendar item ${task.id}`);
+                LogUtils.debug(`Processing calendar item ${task.id} in calendar ${targetCalendarId}`);
 
                 // ── FAST PATH: use metadata eventId as source of truth ──
-                // The events cache can be stale (up to 10s), which causes duplicates
-                // when multiple syncs fire in quick succession. The metadata is always
-                // up-to-date because we write it synchronously after each API call.
-                const currentCalendarId = this.plugin.settings.calendarId.trim();
-                const metadataMatchesCalendar =
-                    metadata?.eventId &&
-                    metadata.calendarId === currentCalendarId;
-
-                if (metadataMatchesCalendar && !task.completed) {
+                if (metadata?.eventId && !task.completed) {
                     try {
                         const event = this.createEventFromTask(task);
-                        await this.makeRequest(this.getCalendarEventsEndpoint(metadata.eventId), 'PUT', event);
-                        this.updateTaskMetadata(task, metadata.eventId, metadata);
+                        await this.makeRequest(this.getCalendarEventsEndpoint(metadata.eventId, targetCalendarId), 'PUT', event);
+                        this.updateTaskMetadata(task, metadata.eventId, metadata, targetCalendarId);
                         await this.saveSettings();
                         LogUtils.debug(`Updated existing event ${metadata.eventId} for task ${task.id} (via metadata fast path)`);
                         return;
@@ -390,7 +384,7 @@ export class CalendarSync {
                 // ── SLOW PATH: query calendar API for task events ──
                 // Only used for: completed tasks, new tasks (no metadata), or when the
                 // metadata eventId was stale (event deleted externally)
-                const events = await this.findAllObsidianEvents({ forceFresh: true });
+                const events = await this.findAllObsidianEvents({ forceFresh: true, calendarId: targetCalendarId });
                 const taskEvents = events.filter(event =>
                     event.extendedProperties?.private?.obsidianTaskId === task.id
                 );
@@ -400,7 +394,9 @@ export class CalendarSync {
                     LogUtils.debug(`Task ${task.id} is marked as completed, forcing sync to delete events`);
                     try {
                         // Delete all events first
-                        const deleteResults = await Promise.allSettled(taskEvents.map(event => this.deleteEvent(event.id)));
+                        const deleteResults = await Promise.allSettled(
+                            taskEvents.map(event => this.deleteEvent(event.id, task.id, targetCalendarId))
+                        );
 
                         // Check for any failures
                         const failures = deleteResults.filter(result => result.status === 'rejected');
@@ -434,23 +430,25 @@ export class CalendarSync {
                     // Delete duplicates if any
                     if (duplicates.length > 0) {
                         LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${task.id}`);
-                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id)));
+                        await Promise.all(
+                            duplicates.map(event => this.deleteEvent(event.id, task.id, targetCalendarId))
+                        );
                         this.clearEventsCache(); // Invalidate after cleanup
                     }
 
                     // Update the kept event
                     const event = this.createEventFromTask(task);
-                    await this.makeRequest(this.getCalendarEventsEndpoint(keepEvent.id), 'PUT', event);
-                    this.updateTaskMetadata(task, keepEvent.id, metadata);
+                    await this.makeRequest(this.getCalendarEventsEndpoint(keepEvent.id, targetCalendarId), 'PUT', event);
+                    this.updateTaskMetadata(task, keepEvent.id, metadata, targetCalendarId);
                     await this.saveSettings();
                     LogUtils.debug(`Updated existing event ${keepEvent.id} for task ${task.id}`);
                     return;
                 }
 
                 // Create new event only if we don't have any existing ones
-                const newEventId = await this.createEvent(task);
+                const newEventId = await this.createEvent(task, targetCalendarId);
                 if (newEventId) {
-                    this.updateTaskMetadata(task, newEventId, metadata);
+                    this.updateTaskMetadata(task, newEventId, metadata, targetCalendarId);
                     await this.saveSettings();
                     this.clearEventsCache(); // Invalidate after creation so next sync sees it
                     LogUtils.debug(`Created new event ${newEventId} for task ${task.id}`);
@@ -468,7 +466,12 @@ export class CalendarSync {
         return result.changed;
     }
 
-    public updateTaskMetadata(task: Task, eventId: string | undefined, existingMetadata?: TaskMetadata): void {
+    public updateTaskMetadata(
+        task: Task,
+        eventId: string | undefined,
+        existingMetadata?: TaskMetadata,
+        calendarId?: string
+    ): void {
         if (!eventId) {
             LogUtils.warn('Cannot update metadata without event ID');
             return;
@@ -492,7 +495,7 @@ export class CalendarSync {
         const metadata = {
             filePath: task.filePath || existingMetadata?.filePath || '',
             eventId: eventId,
-            calendarId: this.plugin.settings.calendarId.trim(),
+            calendarId: this.validateCalendarTarget(calendarId || existingMetadata?.calendarId),
             title: task.title,
             date: task.date,
             time: task.time,
@@ -734,11 +737,16 @@ export class CalendarSync {
      * @param forceFresh Force a fresh fetch from API instead of using cache
      * @returns Array of calendar events
      */
-    public async findAllObsidianEvents(options?: { timeMin?: string; timeMax?: string; forceFresh?: boolean }): Promise<GoogleCalendarEvent[]> {
-        const { timeMin, timeMax, forceFresh = false } = options ?? {};
+    public async findAllObsidianEvents(options?: {
+        timeMin?: string;
+        timeMax?: string;
+        forceFresh?: boolean;
+        calendarId?: string;
+    }): Promise<GoogleCalendarEvent[]> {
+        const { timeMin, timeMax, forceFresh = false, calendarId: requestedCalendarId } = options ?? {};
         try {
-            // Generate a cache key based on the time parameters
-            const calendarId = this.plugin.settings.calendarId.trim();
+            // Generate a cache key based on the time parameters and calendar.
+            const calendarId = this.validateCalendarTarget(requestedCalendarId);
             const cacheKey = `events-${calendarId}-${timeMin || 'none'}-${timeMax || 'none'}`;
 
             // Check cache first, unless forced to get fresh data
@@ -769,7 +777,7 @@ export class CalendarSync {
 
             do {
                 const response = await this.makeRequest(
-                    this.getCalendarEventsEndpoint(),
+                    this.getCalendarEventsEndpoint(undefined, calendarId),
                     'GET',
                     pageToken ? { ...params, pageToken } : params
                 );
@@ -794,27 +802,28 @@ export class CalendarSync {
         }
     }
 
-    public async createEvent(task: Task): Promise<string> {
+    public async createEvent(task: Task, calendarId?: string): Promise<string> {
         if (!task.id) {
             throw new Error('Cannot create event for task without ID');
         }
 
-        return this.withLock(`task:${task.id}`, async () => {
+        const targetCalendarId = this.validateCalendarTarget(calendarId);
+        return this.withLock(`calendar:${targetCalendarId}:task:${task.id}`, async () => {
             try {
                 // First cleanup any existing events and get the ID of any event we should keep
-                const existingEventId = await this.cleanupExistingEvents(task.id);
+                const existingEventId = await this.cleanupExistingEvents(task.id, targetCalendarId);
 
                 if (existingEventId) {
                     LogUtils.debug(`Using existing event ${existingEventId} for task ${task.id}`);
                     // Update the existing event instead of creating a new one
                     const event = this.createEventFromTask(task);
-                    await this.makeRequest(this.getCalendarEventsEndpoint(existingEventId), 'PUT', event);
+                    await this.makeRequest(this.getCalendarEventsEndpoint(existingEventId, targetCalendarId), 'PUT', event);
                     return existingEventId;
                 }
 
                 // Create new event only if we don't have a valid existing one
                 const event = this.createEventFromTask(task);
-                const response = await this.makeRequest(this.getCalendarEventsEndpoint(), 'POST', event);
+                const response = await this.makeRequest(this.getCalendarEventsEndpoint(undefined, targetCalendarId), 'POST', event);
                 if (!response.id) {
                     throw new Error('Failed to create event: no event ID returned');
                 }
