@@ -26,21 +26,16 @@
     "esbuild": "^0.19.0",
     "obsidian": "1.12.3",
     "tslib": "2.3.1",
-    "typescript": "5.5.4",
-    "@types/dotenv": "^6.1.1"
+    "typescript": "5.5.4"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.4",
     "@codemirror/language": "^6.10.7",
     "@codemirror/state": "^6.2.1",
     "@codemirror/view": "^6.21.3",
-    "@googleapis/oauth2": "^1.0.0",
-    "googleapis": "^128.0.0",
-    "googleapis-common": "^7.2.0",
     "immer": "^10.1.1",
     "just-debounce-it": "^3.2.0",
-    "zustand": "^5.0.3",
-    "dotenv": "^16.4.1"
+    "zustand": "^5.0.3"
   },
   "contributors": [
     "Sasoon Sarkisian (original upstream author)"
