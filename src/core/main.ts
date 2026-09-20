@@ -344,16 +344,17 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                             // completed occurrence leaves its old calendar event behind.
                             if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
-                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) { // Use a longer window (2 seconds)
-                                    LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago, skipping (file handler)`);
+                                const changed = hasTaskChanged(task, metadata, task.id).changed;
+                                if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS && !changed) {
+                                    LogUtils.debug(`Task ${task.id} was just synced ${syncAge}ms ago and is unchanged; skipping echo`);
                                     continue;
                                 }
                             }
 
-                            // Only queue if not locked
-                            if (!state.isTaskLocked(task.id)) {
-                                tasksToQueue.push(task);
-                            }
+                            // Never drop a real edit just because the previous
+                            // sync still owns the task lock. enqueueTasks() knows
+                            // how to keep locked items queued for a follow-up pass.
+                            tasksToQueue.push(task);
                         }
 
                         // Enqueue all tasks at once
