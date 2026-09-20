@@ -1,72 +1,90 @@
-/* Plugin ribbon/status states */
+/* Tasks Google Calendar Sync */
 
-.ribbon-icon.calendar-clock {
+.tasks-gcal-sync-task-id {
+    display: none !important;
+}
+
+/* Ribbon status */
+
+.gcal-sync-ribbon {
     opacity: 0.8;
-    transition: opacity 0.2s ease, color 0.2s ease;
+    transition: opacity 150ms ease, color 150ms ease;
 }
 
-.ribbon-icon.calendar-clock.is-connected {
+.gcal-sync-ribbon.is-connected {
     opacity: 1;
-    color: var(--interactive-success);
 }
 
-.ribbon-icon.calendar-clock.is-syncing {
+.gcal-sync-ribbon.is-syncing {
     opacity: 1;
     color: var(--interactive-accent);
-    animation: tasks-gcal-spin 2s linear infinite;
+    animation: gcal-sync-spin 1.5s linear infinite;
 }
 
-.ribbon-icon.calendar-clock.is-error {
+.gcal-sync-ribbon.is-error {
     opacity: 1;
     color: var(--text-error);
 }
 
-.ribbon-icon.calendar-clock.is-disconnected {
+.gcal-sync-ribbon.is-disconnected {
     opacity: 0.55;
     color: var(--text-muted);
 }
 
-body.is-mobile .ribbon-icon.calendar-clock.is-disconnected {
-    opacity: 0.8;
-    color: var(--text-error-hover);
+body.is-mobile .gcal-sync-ribbon.is-disconnected {
+    opacity: 0.85;
     border: 1px dotted var(--text-error);
     border-radius: var(--radius-s);
 }
 
-body.is-mobile .ribbon-icon.calendar-clock.is-error {
-    animation: tasks-gcal-pulse 2s ease-in-out infinite;
+body.is-mobile .gcal-sync-ribbon.is-error {
+    animation: gcal-sync-pulse 2s ease-in-out infinite;
 }
 
-@keyframes tasks-gcal-spin {
-    from {
-        transform: rotate(0deg);
-    }
+/* Diagnostics */
 
+.gcal-diagnostics-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-block: var(--size-4-2);
+}
+
+.gcal-diagnostics-table td {
+    padding: var(--size-2-2) var(--size-4-2);
+    border-bottom: 1px solid var(--background-modifier-border);
+    vertical-align: top;
+}
+
+.gcal-diagnostics-table td:first-child {
+    width: 40%;
+    color: var(--text-muted);
+    font-weight: var(--font-semibold);
+}
+
+@keyframes gcal-sync-spin {
     to {
         transform: rotate(360deg);
     }
 }
 
-@keyframes tasks-gcal-pulse {
+@keyframes gcal-sync-pulse {
     0%,
     100% {
-        transform: scale(1);
         opacity: 1;
     }
 
     50% {
-        transform: scale(1.08);
-        opacity: 0.7;
+        opacity: 0.55;
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .ribbon-icon.calendar-clock {
+    .gcal-sync-ribbon {
         transition: none;
     }
 
-    .ribbon-icon.calendar-clock.is-syncing,
-    body.is-mobile .ribbon-icon.calendar-clock.is-error {
+    .gcal-sync-ribbon.is-syncing,
+    body.is-mobile .gcal-sync-ribbon.is-error {
         animation: none;
     }
 }
