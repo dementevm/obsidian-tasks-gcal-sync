@@ -417,6 +417,10 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
                     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
                     if (!view || !view.file) return;
+                    if (!this.taskParser.isFileInScope(view.file)) {
+                        LogUtils.debug(`Ignoring editor changes outside sync scope: ${view.file.path}`);
+                        return;
+                    }
 
                     // Check if the cursor is on a task line
                     const cursorPos = editor.getCursor();
@@ -448,6 +452,11 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
     private async processEditorChanges(file: TFile) {
         const state = useStore.getState();
+        if (!this.taskParser.isFileInScope(file)) {
+            LogUtils.debug(`Ignoring editor sync outside configured scope: ${file.path}`);
+            return;
+        }
+
         try {
             // First check if we can read the file
             try {
