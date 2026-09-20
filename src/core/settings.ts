@@ -127,7 +127,21 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     // Primary consent is device-local and persists once explicitly
                     // granted. Existing tasks may remain bound to primary even after
                     // the default Calendar ID is switched back to a dedicated calendar.
-                    const calendarChanged = nextId !== this.plugin.settings.calendarId;
+                    const previousCalendarId = this.plugin.settings.calendarId.trim();
+                    const calendarChanged = nextId !== previousCalendarId;
+
+                    if (calendarChanged && previousCalendarId) {
+                        // Legacy metadata created before calendar ownership was
+                        // tracked belongs to the calendar that was active before
+                        // this setting changed. Stamp it before switching targets
+                        // so existing tasks never "migrate" implicitly.
+                        for (const metadata of Object.values(this.plugin.settings.taskMetadata)) {
+                            if (metadata.eventId && !metadata.calendarId) {
+                                metadata.calendarId = previousCalendarId;
+                            }
+                        }
+                    }
+
                     this.plugin.settings.calendarId = nextId;
 
                     if (calendarChanged) {
