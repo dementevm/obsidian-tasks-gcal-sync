@@ -1,6 +1,6 @@
 # Release smoke test
 
-Status: **PASSED** on 2026-09-20 for the current release candidate on desktop and iOS.
+Status: full functional smoke **PASSED** on 2026-09-20 on desktop and iOS. A small targeted regression is required after the final tooling/legacy-file refresh before tagging 1.0.0.
 
 Run this checklist again before every public release when synchronization, OAuth, task parsing, calendar targeting, SecretStorage, or build/release code changes.
 
@@ -140,11 +140,24 @@ Then:
 - [x] Verify normal plugin load/unload does not run generic orphan cleanup.
 - [x] Perform final Calendar audit: no new duplicate/orphan smoke events and no ordinary Google events were modified unexpectedly.
 
+## 15. Post-refresh targeted regression
+
+Run this after the final repository/tooling refresh because that pass changes the production JS target/minification, hidden task-ID widget styling, task-ID generation, and HTTP error metadata preservation.
+
+- [ ] Desktop: plugin loads from the refreshed CI artifact with no startup errors.
+- [ ] Desktop: create a new dated/timed task; verify its task-id is hidden and exactly one Google event is created.
+- [ ] Desktop: edit the task title/time and complete/delete it; verify the same event updates and is removed without duplicates.
+- [ ] Desktop: verify the ribbon connected/syncing/disconnected/error states do not disturb layout; reduced-motion users get no forced animation.
+- [ ] Desktop: complete one recurring task occurrence and verify the next occurrence receives a fresh lowercase-alphanumeric task-id.
+- [ ] iOS: plugin loads from the refreshed build and one create/update sync succeeds.
+- [ ] Verify no unexpected retry loop occurs for a non-retryable Calendar 4xx response; normal authentication still recovers from a refreshable 401.
+
 ## Release gate
 
 A release candidate is ready for merge/tagging when:
 
 - [x] the full functional smoke test above passes;
+- [ ] the post-refresh targeted regression passes;
 - [x] `npm audit` is clean;
 - [x] clean `npm ci && npm run build` succeeds locally;
 - [ ] GitHub Build workflow is green on the release-preparation commit;
