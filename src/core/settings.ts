@@ -295,12 +295,24 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('OAuth Client Secret')
-            .setDesc('Select or create a SecretStorage entry containing the client secret. The secret value stays local to this device.')
+            .setDesc('Select or create a SecretStorage entry containing the client secret. The value is copied into this vault\'s device-local secret slot.')
             .addComponent(el => new SecretComponent(this.app, el)
                 .setValue(this.plugin.settings.clientSecretName || '')
                 .onChange(async (value) => {
-                    this.plugin.settings.clientSecretName = value ?? '';
+                    const selectedName = value ?? '';
+                    const selectedSecret = selectedName
+                        ? this.app.secretStorage.getSecret(selectedName)
+                        : null;
+                    const namespace = this.plugin.settings.vaultSecretNamespace || this.app.vault.getName();
+                    const canonicalName = `obsidian-tasks-gcal-sync-client-secret:${namespace}`;
+
+                    if (selectedSecret) {
+                        this.app.secretStorage.setSecret(canonicalName, selectedSecret);
+                    }
+
+                    this.plugin.settings.clientSecretName = canonicalName;
                     await this.plugin.saveSettings();
+                    this.display();
                 }));
 
         new Setting(containerEl)
