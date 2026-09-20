@@ -93,6 +93,11 @@ export class TaskParser {
         return uniqueFiles;
     }
 
+    public isFileInScope(file: TFile): boolean {
+        if (this.plugin.settings.scanEntireVault) return true;
+        return this.getFilteredFiles().some(candidate => candidate.path === file.path);
+    }
+
     public async parseTasksFromFile(file: TFile): Promise<Task[]> {
         const { isSyncAllowed } = useStore.getState();
         if (!isSyncAllowed()) {
@@ -100,12 +105,9 @@ export class TaskParser {
             return [];
         }
 
-        if (!this.plugin.settings.scanEntireVault) {
-            const allowedFiles = new Set(this.getFilteredFiles().map(candidate => candidate.path));
-            if (!allowedFiles.has(file.path)) {
-                LogUtils.debug(`File ${file.path} is outside the configured sync scope, skipping`);
-                return [];
-            }
+        if (!this.isFileInScope(file)) {
+            LogUtils.debug(`File ${file.path} is outside the configured sync scope, skipping`);
+            return [];
         }
 
         try {
