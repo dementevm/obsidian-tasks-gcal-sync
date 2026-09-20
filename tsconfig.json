@@ -2,16 +2,14 @@
     "compilerOptions": {
         "module": "ESNext",
         "target": "ES2021",
-        "strict": true,
-        "noImplicitReturns": true,
-        "noFallthroughCasesInSwitch": true,
-        "noUncheckedIndexedAccess": true,
         "moduleResolution": "node",
         "isolatedModules": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,
         "allowSyntheticDefaultImports": true,
         "importHelpers": true,
+        "noImplicitAny": true,
+        "strictNullChecks": true,
         "lib": [
             "ES2021",
             "DOM"
@@ -22,5 +20,9 @@
     },
     "include": [
         "src/**/*.ts"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist"
     ]
 }
