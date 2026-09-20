@@ -267,6 +267,7 @@ export class TaskParser {
                 durationMinutes: taskData.durationMinutes,
                 reminder: taskData.reminder,
                 kind,
+                timeZone: metadata?.timeZone,
                 completed: kind === 'task' ? this.isTaskCompleted(line) : false,
                 createdAt: metadata?.createdAt || Date.now(),
                 completedDate: this.getCompletionDate(line),
@@ -512,8 +513,12 @@ export class TaskParser {
         header = header.replace(/🛫\s*\d{4}-\d{2}-\d{2}/g, '').trim();
         // Scheduled date: ⏳ YYYY-MM-DD
         header = header.replace(/⏳\s*\d{4}-\d{2}-\d{2}/g, '').trim();
-        // Recurrence: 🔁 (followed by recurrence pattern)
-        header = header.replace(/🔁\s*[^\s]*/g, '').trim();
+        // Recurrence stays owned by Obsidian Tasks. Remove the complete expression
+        // from the Google event title, but do not create a Google recurring event.
+        header = header.replace(
+            /🔁\s*.*?(?=(?:\s(?:📅|⏰|➡️|🔔|⏱|✅|🆔|🛫|⏳|⛔|❌|➕|⏩|⏫|🔼|🔽|🔺|⏬|<!--))|$)/g,
+            ''
+        ).trim();
         // Date: 📅 (followed by date)
         header = header.replace(/📅\s*[^\s]*/g, '').trim();
         // Priority emojis (no additional text needed)
