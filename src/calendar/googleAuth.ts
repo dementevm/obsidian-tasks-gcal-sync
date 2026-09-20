@@ -302,6 +302,46 @@ export class GoogleAuthManager {
         return this.refreshPromise;
     }
 
+    /**
+     * Refresh immediately after Calendar API rejected an access token with 401.
+     * Access tokens can become invalid before their advertised expiry; each
+     * device should recover using its own device-local refresh token.
+     */
+    async refreshAfterUnauthorized(): Promise<string> {
+        this.accessToken = null;
+        this.tokenExpiry = null;
+
+        try {
+            const tokens = await this.deduplicatedRefresh();
+            return tokens.access_token;
+        } catch (error) {
+            // Do not keep advertising a verified session after refresh failed.
+            this.accessToken = null;
+            this.refreshToken = null;
+            this.tokenExpiry = null;
+            throw error;
+        }
+    }
+
+    /**
+     * Disconnect only this Obsidian device. Do NOT call Google's revoke
+     * endpoint here: revoking the OAuth grant can invalidate credentials used
+     * by other desktop/mobile devices connected with the same Google project.
+     */
+    async clearLocalAuthentication(): Promise<void> {
+        this.accessToken = null;
+        this.refreshToken = null;
+        this.tokenExpiry = null;
+        this.refreshPromise = null;
+        this.app.secretStorage.setSecret(this.refreshTokenSecretId, '');
+        this.clearTemporaryAuthState();
+
+        this.plugin.settings.oauth2Tokens = undefined;
+        this.plugin.settings.encryptedOAuth2Tokens = undefined;
+        this.plugin.settings.tokensEncrypted = false;
+        await this.plugin.saveSettings();
+    }
+
     async revokeAccess(): Promise<void> {
         const token = this.refreshToken
             ?? this.app.secretStorage.getSecret(this.refreshTokenSecretId)
@@ -340,10 +380,10 @@ export class GoogleAuthManager {
     }
 
     isAuthenticated(): boolean {
-        return Boolean(
-            this.refreshToken ||
-            this.app.secretStorage.getSecret(this.refreshTokenSecretId)
-        );
+        // A stored refresh token is only a credential candidate. Authentication
+        // becomes true after loadSavedTokens()/OAuth has successfully obtained
+        // an access token on this device.
+        return Boolean(this.accessToken && this.refreshToken && this.tokenExpiry);
     }
 
     private clearTemporaryAuthState(): void {
