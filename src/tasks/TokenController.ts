@@ -4,6 +4,7 @@ import { TFile, Editor, Platform } from "obsidian"
 import type GoogleCalendarSyncPlugin from '../core/main'
 import { LogUtils } from '../utils/logUtils'
 import { ErrorUtils } from '../utils/errorUtils'
+import { IdUtils } from '../utils/idUtils'
 import debounce from 'just-debounce-it'
 
 
@@ -18,11 +19,7 @@ class ZeroWidthWidget extends WidgetType {
 
     toDOM() {
         const wrap = document.createElement('span')
-        wrap.className = 'obsidian-gcal-task-id'
-        wrap.setAttribute('aria-label', 'Task ID')
-        // Extract just the ID from the comment
-        const id = this.content.match(/<!-- task-id: ([a-z0-9]+) -->/)?.[1] || ''
-        wrap.textContent = id
+        wrap.setAttribute('aria-hidden', 'true')
         return wrap
     }
 
@@ -47,8 +44,6 @@ export class TokenController {
     }
 
     private generateFreshTaskId(usedIds: Set<string>): string {
-        const { IdUtils } = require('../utils/idUtils')
-
         let id = IdUtils.generateTimeBasedId()
         while (usedIds.has(id)) {
             id = IdUtils.generateTimeBasedId()
@@ -1015,10 +1010,6 @@ export class TokenController {
     // Private implementation of generateTaskId
     private _generateTaskId(view: EditorView, pos: number): string {
         try {
-            // Import the IdUtils class we created for mobile compatibility
-            // Using delayed import to avoid potential issues on load
-            const { IdUtils } = require('../utils/idUtils');
-
             // Generate a time-based ID for better uniqueness
             const id = IdUtils.generateTimeBasedId();
             const now = Date.now();
