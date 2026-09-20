@@ -8,6 +8,8 @@ const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 
+const LEGACY_CLIENT_SECRET_ID = 'obsidian-tasks-gcal-sync-client-secret';
+const CLIENT_SECRET_PREFIX = 'obsidian-tasks-gcal-sync-client-secret';
 const LEGACY_REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
 const REFRESH_TOKEN_SECRET_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
 const LOCAL_STATE_PREFIX = 'obsidian-tasks-gcal-sync-oauth-state';
@@ -35,6 +37,10 @@ export class GoogleAuthManager {
         return this.plugin.settings.vaultSecretNamespace || this.app.vault.getName();
     }
 
+    private get clientSecretId(): string {
+        return `${CLIENT_SECRET_PREFIX}:${this.secretNamespace}`;
+    }
+
     private get refreshTokenSecretId(): string {
         return `${REFRESH_TOKEN_SECRET_PREFIX}:${this.secretNamespace}`;
     }
@@ -52,9 +58,55 @@ export class GoogleAuthManager {
     }
 
     private getClientSecret(): string | null {
-        const secretName = this.plugin.settings.clientSecretName?.trim();
-        if (!secretName) return null;
-        return this.app.secretStorage.getSecret(secretName);
+        // Canonical per-vault secret slot. SecretStorage values stay device-local,
+        // while the derived slot name is stable across devices for the same vault.
+        const canonical = this.app.secretStorage.getSecret(this.clientSecretId);
+        if (canonical) return canonical;
+
+        // Compatibility fallbacks for pre-vault-scoped builds.
+        const configuredName = this.plugin.settings.clientSecretName?.trim();
+        if (configuredName) {
+            const configured = this.app.secretStorage.getSecret(configuredName);
+            if (configured) return configured;
+        }
+
+        return this.app.secretStorage.getSecret(LEGACY_CLIENT_SECRET_ID);
+    }
+
+    public getClientSecretStatus(): { id: string; available: boolean; configuredName: string } {
+        return {
+            id: this.clientSecretId,
+            available: Boolean(this.getClientSecret()),
+            configuredName: this.plugin.settings.clientSecretName?.trim() || ''
+        };
+    }
+
+    public migrateClientSecretToVaultScope(): boolean {
+        const existingCanonical = this.app.secretStorage.getSecret(this.clientSecretId);
+        if (existingCanonical) {
+            this.plugin.settings.clientSecretName = this.clientSecretId;
+            return true;
+        }
+
+        const candidates = [
+            this.plugin.settings.clientSecretName?.trim(),
+            LEGACY_CLIENT_SECRET_ID
+        ].filter((value): value is string => Boolean(value));
+
+        for (const candidate of Array.from(new Set(candidates))) {
+            const value = this.app.secretStorage.getSecret(candidate);
+            if (!value) continue;
+
+            this.app.secretStorage.setSecret(this.clientSecretId, value);
+            this.plugin.settings.clientSecretName = this.clientSecretId;
+            LogUtils.debug('Migrated OAuth client secret to vault-scoped SecretStorage');
+            return true;
+        }
+
+        // Keep the canonical name in synced settings even when this device has no
+        // value yet. The user can populate the same local SecretStorage slot here.
+        this.plugin.settings.clientSecretName = this.clientSecretId;
+        return false;
     }
 
     private validateConfiguration(): void {
