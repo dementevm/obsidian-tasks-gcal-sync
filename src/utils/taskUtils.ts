@@ -28,16 +28,10 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
     // If no metadata exists, task has changed
     if (!metadata) return { changed: true };
 
-    // Check for "just synced" flag - prevent rapid consecutive syncs
-    // This prevents the double-sync issue where a task is requeued immediately after being processed
-    if (metadata.justSynced === true && metadata.syncTimestamp) {
-        // Only skip if the sync was very recent (within 1.5 seconds)
-        const syncAge = Date.now() - metadata.syncTimestamp;
-        if (syncAge < 1500) {
-            LogUtils.debug(`Task ${taskId} was just synced ${syncAge}ms ago, skipping redundant sync`);
-            return { changed: false };
-        }
-    }
+    // Do not use the ephemeral justSynced flag to short-circuit change
+    // detection. A real user edit can happen immediately after a successful
+    // sync and must still be detected. Callers may use justSynced only after
+    // confirming that the current task still matches this metadata.
 
     // Always consider completed tasks as changed to ensure they get synced
     if (task.completed) {
