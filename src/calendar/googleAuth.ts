@@ -10,8 +10,8 @@ const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 const CANONICAL_REDIRECT_URI = 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/';
 
 const LEGACY_CLIENT_SECRET_ID = 'obsidian-tasks-gcal-sync-client-secret';
-const REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
-const LEGACY_SCOPED_REFRESH_TOKEN_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
+const REFRESH_TOKEN_SECRET_ID = 'tasks-gcal-sync-refresh-token';
+const LEGACY_REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
 const LOCAL_STATE_PREFIX = 'obsidian-tasks-gcal-sync-oauth-state';
 const LOCAL_VERIFIER_PREFIX = 'obsidian-tasks-gcal-sync-pkce-verifier';
 
@@ -50,7 +50,9 @@ export class GoogleAuthManager {
     }
 
     private get refreshTokenSecretId(): string {
-        return `${REFRESH_TOKEN_SECRET_ID}:${this.secretNamespace}`;
+        // SecretStorage is already scoped to the current vault. Keep the ID
+        // stable and valid: lowercase letters, numbers, and dashes only.
+        return REFRESH_TOKEN_SECRET_ID;
     }
 
     private getClientSecret(): string | null {
@@ -252,16 +254,11 @@ export class GoogleAuthManager {
         try {
             let refreshToken = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
 
-            // Migrate early privacy-fork tokens. Obsidian SecretStorage is
-            // vault-local; the extra namespace keeps our own migration slots
-            // explicit and stable across devices that share plugin settings.
+            // Migrate the earlier valid unscoped ID. SecretStorage is already
+            // vault-local, so adding the vault name to the Secret ID is both
+            // unnecessary and invalid under current Obsidian ID rules.
             if (!refreshToken) {
-                const legacyScopedId =
-                    `${LEGACY_SCOPED_REFRESH_TOKEN_PREFIX}:${this.secretNamespace}`;
-                refreshToken = this.app.secretStorage.getSecret(legacyScopedId);
-            }
-            if (!refreshToken) {
-                refreshToken = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
+                refreshToken = this.app.secretStorage.getSecret(LEGACY_REFRESH_TOKEN_SECRET_ID);
             }
             if (refreshToken) {
                 this.app.secretStorage.setSecret(this.refreshTokenSecretId, refreshToken);
