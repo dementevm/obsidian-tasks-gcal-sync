@@ -922,12 +922,14 @@ export class CalendarSync {
             'Obsidian is the source of truth; edit this item in Obsidian.';
 
         if (!effectiveTime) {
-            const reminderOverrides = this.plugin.settings.allDayTaskRemindersEnabled
-                ? [{
-                    method: 'popup' as const,
-                    minutes: task.reminder ?? this.plugin.settings.defaultAllDayTaskReminderMinutes
-                }]
-                : [];
+            const reminderOverrides = task.reminder !== undefined
+                ? [{ method: 'popup' as const, minutes: task.reminder }]
+                : (this.plugin.settings.allDayTaskRemindersEnabled
+                    ? [{
+                        method: 'popup' as const,
+                        minutes: this.plugin.settings.defaultAllDayTaskReminderMinutes
+                    }]
+                    : []);
 
             return {
                 summary: task.title,
