@@ -252,9 +252,9 @@ export class GoogleAuthManager {
         try {
             let refreshToken = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
 
-            // Migrate early privacy-fork tokens. SecretStorage is global to
-            // Obsidian, so the stable public version uses an explicit vault
-            // namespace to avoid collisions between vaults.
+            // Migrate early privacy-fork tokens. Obsidian SecretStorage is
+            // vault-local; the extra namespace keeps our own migration slots
+            // explicit and stable across devices that share plugin settings.
             if (!refreshToken) {
                 const legacyScopedId =
                     `${LEGACY_SCOPED_REFRESH_TOKEN_PREFIX}:${this.secretNamespace}`;
