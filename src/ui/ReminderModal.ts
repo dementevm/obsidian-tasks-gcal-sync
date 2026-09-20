@@ -14,6 +14,20 @@ function normalizeDuration(value: string): string | null {
     return /^\d+(?:m|h)$/.test(trimmed) ? trimmed : null;
 }
 
+function offsetToMinutes(value: string): number {
+    const match = value.match(/^(\d+)([mhd])$/);
+    if (!match) return 0;
+    const amount = Number(match[1]);
+    return match[2] === 'd' ? amount * 1440 : match[2] === 'h' ? amount * 60 : amount;
+}
+
+function durationToMinutes(value: string): number {
+    const match = value.match(/^(\d+)([mh])$/);
+    if (!match) return 0;
+    const amount = Number(match[1]);
+    return match[2] === 'h' ? amount * 60 : amount;
+}
+
 export class ReminderModal extends Modal {
     private title = '';
     private date = TimeUtils.getCurrentDate();
@@ -91,14 +105,14 @@ export class ReminderModal extends Modal {
         }
 
         const reminder = normalizeOffset(this.reminder);
-        if (reminder === null) {
-            new Notice('Reminder must look like 30m, 2h, or 1d.');
+        if (reminder === null || (reminder && offsetToMinutes(reminder) > 40320)) {
+            new Notice('Reminder must look like 30m, 2h, or 1d and be no more than 28 days.');
             return;
         }
 
         const duration = normalizeDuration(this.duration);
-        if (duration === null) {
-            new Notice('Duration must look like 20m or 1h.');
+        if (duration === null || (duration && durationToMinutes(duration) > 1440)) {
+            new Notice('Duration must look like 20m or 1h and be no more than 24 hours.');
             return;
         }
 
