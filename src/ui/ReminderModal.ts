@@ -109,8 +109,11 @@ export class ReminderModal extends Modal {
 
         const cursor = this.editor.getCursor();
         const currentLine = this.editor.getLine(cursor.line);
-        const insert = currentLine.trim().length === 0 ? line : `\n${line}`;
-        this.editor.replaceRange(insert, cursor);
+        if (currentLine.trim().length === 0) {
+            this.editor.replaceRange(line, { line: cursor.line, ch: 0 }, { line: cursor.line, ch: currentLine.length });
+        } else {
+            this.editor.replaceRange(`\n${line}`, { line: cursor.line, ch: currentLine.length });
+        }
         this.close();
         new Notice('Calendar reminder added to Obsidian.');
     }
