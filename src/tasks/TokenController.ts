@@ -374,6 +374,11 @@ export class TokenController {
         // Track edits and keep IDs in the Tasks-compatible position.
         this.plugin.registerEvent(
             this.plugin.app.workspace.on('editor-change', debounce((editor: Editor) => {
+                const file = this.plugin.app.workspace.getActiveFile()
+                if (!(file instanceof TFile) || !this.plugin.taskParser.isFileInScope(file)) {
+                    return
+                }
+
                 this.lastEditTime = Date.now()
                 this.ensureIdsAfterMarker(editor)
                 this.ensureUniqueTaskIds(editor)
@@ -971,8 +976,12 @@ export class TokenController {
             const now = Date.now();
             const line = view.state.doc.lineAt(pos);
             const file = this.plugin.app.workspace.getActiveFile();
-            if (!file) {
-                LogUtils.error('No active file found');
+            if (!(file instanceof TFile)) {
+                LogUtils.error('No active Markdown file found');
+                return '';
+            }
+            if (!this.plugin.taskParser.isFileInScope(file)) {
+                LogUtils.debug(`Skipping task ID generation outside sync scope: ${file.path}`);
                 return '';
             }
             LogUtils.debug('Generating ID for calendar-tracked line');
