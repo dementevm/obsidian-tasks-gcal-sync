@@ -53,6 +53,18 @@ Status date: 2026-09-20
 - [x] Keep autocomplete usable after Tasks metadata and preserve the cursor while task lines are normalized.
 - [x] Keep generic orphan/duplicate cleanup manual and confirmed.
 
+## Repository freshness pass
+
+- [x] Compare the complete repository tree against the current upstream Sasoon repository.
+- [x] Review every file that remained byte-identical to upstream.
+- [x] Keep only LICENSE byte-identical intentionally because it is the canonical GPL-3.0 text.
+- [x] Refresh tsconfig, version tooling, styles, constants, repair types and utility helpers.
+- [x] Remove obsolete global OAuth revoke / primary-only endpoint / synthetic timeout constants.
+- [x] Update TypeScript to 5.9.3 and @types/node to 22.19.17.
+- [x] Update GitHub Actions runtime to current v7 actions and Node 22.
+- [x] Verify the refreshed project with npm ci, npm audit, typecheck, production build and installable artifact packaging.
+- [ ] Run the targeted post-refresh runtime regression section in smoke-test.md.
+
 ## Dependencies and build
 
 - [x] Update stale dependencies and commit both package.json and package-lock.json.
