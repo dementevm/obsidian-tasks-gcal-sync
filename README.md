@@ -381,6 +381,8 @@ Imported setup links are validated and cannot replace the plugin's canonical OAu
 
 ## Building and CI
 
+Building from source requires **Node.js 22 or newer**.
+
 Local build:
 
 ```bash
@@ -395,7 +397,7 @@ The release files are:
 - `manifest.json`
 - `styles.css`
 
-GitHub Actions runs the same clean install, audit, version consistency checks and production build on every push/PR. It also creates an installable ZIP artifact containing a `tasks-gcal-sync/` directory.
+GitHub Actions currently builds with Node.js 24 and runs the same clean install, audit, version consistency checks and production build on every push/PR. It also creates an installable ZIP artifact containing a `tasks-gcal-sync/` directory.
 
 A tag matching strict `x.y.z` Semantic Versioning triggers the release workflow. The workflow refuses to publish if the tag, `package.json`, `manifest.json`, and `versions.json` disagree. Release tags must not use a `v` prefix: use `1.0.0`, not `v1.0.0`.
 
