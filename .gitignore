@@ -1,43 +1,38 @@
-# Node dependency directories
+# Dependencies
 node_modules/
 
 # Build output
 main.js
 *.js.map
-tasks-gcal-sync.zip
+dist/
+*.zip
 
-# Environment variables and secrets
+# Local Obsidian/plugin runtime files
+data.json
+
+# Secrets and local environment files
 .env
-.env.local
-.env.development
-.env.test
-.env.production
-googleConfig.json
+.env.*
+!.env.example
 credentials.json
 token.json
+googleConfig.json
 *-credentials.json
 *-token.json
 *-secret.json
 *-secret.txt
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Debug logs
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# IDE/editor directories
-.vscode/
+# Editors / IDEs
 .idea/
+.vscode/
 *.swp
 *.swo
 
-# Local scripts
-plugin-reload.sh 
-build.sh
-
-# Other
-PUBLISHING.md
+# OS files
+.DS_Store
+Thumbs.db
