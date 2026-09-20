@@ -1,25 +1,22 @@
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from 'node:fs';
 
-// Read the current version from package.json
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-const currentVersion = packageJson.version;
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const targetVersion = process.env.npm_package_version ?? packageJson.version;
 
-// Read the current manifest
-const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
-// Update manifest version
-manifest.version = currentVersion;
-writeFileSync("manifest.json", JSON.stringify(manifest, null, 4));
-
-// Read the current versions.json
-let versions = {};
-try {
-    versions = JSON.parse(readFileSync("versions.json", "utf8"));
-} catch (e) {
-    console.log("No versions.json found, creating a new one");
+if (!/^\d+\.\d+\.\d+$/.test(targetVersion)) {
+    throw new Error(`Version must use strict x.y.z SemVer; got "${targetVersion}"`);
 }
 
-// Update versions.json with the current version
-versions[currentVersion] = manifest.minAppVersion;
-writeFileSync("versions.json", JSON.stringify(versions, null, 4));
+const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
+if (typeof manifest.minAppVersion !== 'string' || manifest.minAppVersion.length === 0) {
+    throw new Error('manifest.json must define minAppVersion');
+}
 
-console.log(`Updated to version ${currentVersion}`); 
+manifest.version = targetVersion;
+writeFileSync('manifest.json', JSON.stringify(manifest, null, 4) + '\n');
+
+const versions = JSON.parse(readFileSync('versions.json', 'utf8'));
+versions[targetVersion] = manifest.minAppVersion;
+writeFileSync('versions.json', JSON.stringify(versions, null, 4) + '\n');
+
+console.log(`Release metadata updated to ${targetVersion}`);

@@ -1,5 +1,3 @@
-import type { Task, TaskMetadata } from '../core/types';
-
 export interface GoogleCalendarEvent {
     id: string;
     summary: string;
@@ -30,26 +28,7 @@ export interface GoogleCalendarEvent {
     };
 }
 
-export interface RepairContext {
-    tasks: Task[];
-    events: GoogleCalendarEvent[];
-    metadata: Record<string, TaskMetadata>;
-    repairToken: string;
-    startTime: number;
-    timeZone: string;
-    currentBatch: number;
-    completedOperations: string[];
-    failedOperations: Map<string, Error>;
-}
-
-export interface RepairCheckpoint {
-    batchNumber: number;
-    completedItems: string[];
-    context: RepairContext;
-    timestamp: number;
-}
-
-export type RepairPhase = 'init' | 'analysis' | 'delete' | 'update' | 'create' | 'metadata' | 'complete';
+export type RepairPhase = 'init' | 'delete' | 'metadata';
 
 export interface RepairProgress {
     phase: RepairPhase;
@@ -65,22 +44,9 @@ export interface RepairProgress {
 
 export const RepairOperations = {
     INIT: 'Initializing repair',
-    ANALYSIS: 'Analyzing tasks',
     CLEANUP_EVENTS: 'Cleaning up orphaned events',
     CLEANUP_METADATA: 'Cleaning up orphaned metadata',
-    UPDATE: 'Updating events',
-    CREATE: 'Creating events',
-    COMPLETE: 'Completing repair'
 } as const;
-
-export type RepairOperation = typeof RepairOperations[keyof typeof RepairOperations];
-
-export interface RepairPlan {
-    toDelete: GoogleCalendarEvent[];
-    toUpdate: Array<{ task: Task; event: GoogleCalendarEvent }>;
-    toCreate: Task[];
-    totalItems: number;
-}
 
 export interface RepairResult {
     success: boolean;
@@ -96,7 +62,7 @@ export class RepairError extends Error {
         message: string,
         public readonly taskId?: string,
         public readonly eventId?: string,
-        public readonly phase?: string
+        public readonly phase?: string,
     ) {
         super(message);
         this.name = 'RepairError';
@@ -119,10 +85,6 @@ export class CatastrophicError extends RepairError {
 
 export const RepairPhases: Record<RepairPhase, RepairPhase> = {
     init: 'init',
-    analysis: 'analysis',
     delete: 'delete',
-    update: 'update',
-    create: 'create',
     metadata: 'metadata',
-    complete: 'complete'
-} as const; 
+} as const;

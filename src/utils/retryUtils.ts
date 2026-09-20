@@ -1,34 +1,35 @@
+import { ErrorUtils } from './errorUtils';
 import { LogUtils } from './logUtils';
 
-interface RetryOptions {
+export interface RetryOptions {
     maxAttempts?: number;
     initialDelay?: number;
     maxDelay?: number;
     backoffFactor?: number;
-    shouldRetry?: (error: any) => boolean;
+    shouldRetry?: (error: unknown) => boolean;
 }
 
-const defaultOptions: Required<RetryOptions> = {
+const DEFAULT_OPTIONS = {
     maxAttempts: 5,
     initialDelay: 1000,
-    maxDelay: 30000,
+    maxDelay: 30_000,
     backoffFactor: 2,
-    shouldRetry: (error: any) => {
-        // Retry on network errors, rate limits, and server errors
-        if (error.status) {
-            return error.status === 429 || error.status >= 500;
-        }
-        return error.message?.includes('network') ||
-            error.message?.includes('timeout') ||
-            error.code === 'ECONNRESET';
-    }
+    shouldRetry: (error: unknown) => ErrorUtils.isRetryableError(error),
 };
+
+const sleep = (delayMs: number): Promise<void> =>
+    new Promise(resolve => window.setTimeout(resolve, delayMs));
 
 export async function retryWithBackoff<T>(
     operation: () => Promise<T>,
-    options: RetryOptions = {}
+    options: RetryOptions = {},
 ): Promise<T> {
-    const config = { ...defaultOptions, ...options };
+    const config = {
+        ...DEFAULT_OPTIONS,
+        ...options,
+        shouldRetry: options.shouldRetry ?? DEFAULT_OPTIONS.shouldRetry,
+    };
+
     let attempt = 1;
     let delay = config.initialDelay;
 
@@ -41,17 +42,17 @@ export async function retryWithBackoff<T>(
             }
 
             LogUtils.warn(
-                `Operation failed (attempt ${attempt}/${config.maxAttempts}), ` +
-                `retrying in ${delay}ms: ${error}`
+                `Operation failed (attempt ${attempt}/${config.maxAttempts}); ` +
+                `retrying in ${delay}ms: ${ErrorUtils.formatError(error)}`,
             );
 
-            await new Promise(resolve => setTimeout(resolve, delay));
+            await sleep(delay);
             delay = Math.min(delay * config.backoffFactor, config.maxDelay);
-            attempt++;
+            attempt += 1;
         }
     }
 }
 
-export function isRetryableError(error: any): boolean {
-    return defaultOptions.shouldRetry(error);
-} 
+export function isRetryableError(error: unknown): boolean {
+    return DEFAULT_OPTIONS.shouldRetry(error);
+}
