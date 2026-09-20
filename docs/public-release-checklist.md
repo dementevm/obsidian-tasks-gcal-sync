@@ -98,14 +98,14 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 ## Merge gate
 
 - [x] Build workflow is green for chore/community-release-prep.
-- [ ] Merge PR #6 into feature/separate-calendar.
-- [ ] Confirm feature/separate-calendar is green and contains all release-prep commits.
-- [ ] Merge the finished feature branch into default main.
-- [ ] Confirm Build workflow is green on main.
+- [x] Merge PR #6 into feature/separate-calendar.
+- [x] Confirm feature/separate-calendar is green and contains all release-prep commits.
+- [x] Merge the finished feature branch into default main.
+- [x] Confirm Build workflow is green on main.
 
 ## Public release
 
-- [ ] Bump the release version consistently in package.json, manifest.json, and versions.json (planned first public release: 1.0.0).
+- [x] Bump the release version consistently in package.json, package-lock.json, manifest.json, and versions.json (1.0.0).
 - [ ] Change repository visibility from private to public.
 - [ ] Confirm no private issue/PR/Actions-log content should remain private before changing visibility.
 - [ ] Create/push a tag exactly matching manifest.version (for example 1.0.0, never v1.0.0).
