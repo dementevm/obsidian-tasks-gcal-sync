@@ -268,6 +268,7 @@ export class CalendarSync {
                     durationMinutes: task.durationMinutes,
                     reminder: task.reminder,
                     kind: task.kind || 'task',
+                    timeZone: task.timeZone || metadata.timeZone || TimeUtils.getLocalTimeZone(),
                     completed: task.completed,
                     lastModified: Date.now(),
                     lastSynced: Date.now()
