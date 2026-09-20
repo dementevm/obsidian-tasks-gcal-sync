@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - name: Validate release tag and versions
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+
+          if [[ ! "${TAG}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be strict x.y.z SemVer without a v prefix."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          const tag = process.env.GITHUB_REF_NAME;
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+
+          if (pkg.version !== manifest.version) {
+            throw new Error(
+              `Version mismatch: package.json=${pkg.version}, manifest.json=${manifest.version}`
+            );
+          }
+
+          if (tag !== manifest.version) {
+            throw new Error(
+              `Tag ${tag} must exactly match manifest version ${manifest.version}`
+            );
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(versions, manifest.version)) {
+            throw new Error(
+              `versions.json does not contain release version ${manifest.version}`
+            );
+          }
+
+          if (versions[manifest.version] !== manifest.minAppVersion) {
+            throw new Error(
+              `versions.json[${manifest.version}]=${versions[manifest.version]} does not match manifest.minAppVersion=${manifest.minAppVersion}`
+            );
+          }
+
+          console.log(`Release metadata validated: ${tag}`);
+          NODE
+
+      - name: Install dependencies
+        run: npm ci --no-fund
+
+      - name: Security audit
+        run: npm audit
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Validate release files
+        shell: bash
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+
+      - name: Package release bundle
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p "dist/tasks-gcal-sync"
+          cp main.js manifest.json styles.css "dist/tasks-gcal-sync/"
+          (
+            cd dist
+            zip -r "tasks-gcal-sync-${VERSION}.zip" tasks-gcal-sync
+          )
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ZIP="dist/tasks-gcal-sync-${VERSION}.zip"
+
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release upload "${VERSION}"               main.js manifest.json styles.css "${ZIP}"               --clobber
+          else
+            gh release create "${VERSION}"               --title "${VERSION}"               --generate-notes               main.js manifest.json styles.css "${ZIP}"
+          fi
