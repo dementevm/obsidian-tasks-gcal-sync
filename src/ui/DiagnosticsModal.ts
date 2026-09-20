@@ -27,8 +27,13 @@ export class DiagnosticsModal extends Modal {
                 ? this.plugin.settings.includeFolders.join(', ')
                 : 'No folders configured');
 
+        const clientSecretStatus = this.plugin.authManager?.getClientSecretStatus();
+
         const rows: Array<[string, string]> = [
             ['Authentication', this.plugin.authManager?.isAuthenticated() ? 'Connected' : 'Disconnected'],
+            ['OAuth Client Secret', clientSecretStatus?.available
+                ? `Available (${clientSecretStatus.id})`
+                : `Missing on this device (${clientSecretStatus?.id || 'unknown slot'})`],
             ['Calendar ID', this.plugin.settings.calendarId || 'Not configured'],
             ['Primary confirmed', this.plugin.settings.calendarId === 'primary'
                 ? (this.plugin.settings.primaryCalendarConfirmed ? 'Yes' : 'No')
