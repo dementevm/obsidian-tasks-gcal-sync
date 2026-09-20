@@ -8,9 +8,10 @@ const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 
-const REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
-const LOCAL_STATE_KEY = 'obsidian-tasks-gcal-sync-oauth-state';
-const LOCAL_VERIFIER_KEY = 'obsidian-tasks-gcal-sync-pkce-verifier';
+const LEGACY_REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
+const REFRESH_TOKEN_SECRET_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
+const LOCAL_STATE_PREFIX = 'obsidian-tasks-gcal-sync-oauth-state';
+const LOCAL_VERIFIER_PREFIX = 'obsidian-tasks-gcal-sync-pkce-verifier';
 
 export class GoogleAuthManager {
     private readonly plugin: GoogleCalendarSyncPlugin;
@@ -28,6 +29,22 @@ export class GoogleAuthManager {
 
     private get clientId(): string {
         return this.plugin.settings.clientId.trim();
+    }
+
+    private get secretNamespace(): string {
+        return this.plugin.settings.vaultSecretNamespace || this.app.vault.getName();
+    }
+
+    private get refreshTokenSecretId(): string {
+        return `${REFRESH_TOKEN_SECRET_PREFIX}:${this.secretNamespace}`;
+    }
+
+    private get localStateKey(): string {
+        return `${LOCAL_STATE_PREFIX}:${this.secretNamespace}`;
+    }
+
+    private get localVerifierKey(): string {
+        return `${LOCAL_VERIFIER_PREFIX}:${this.secretNamespace}`;
     }
 
     private get redirectUri(): string {
@@ -66,8 +83,8 @@ export class GoogleAuthManager {
 
         // Device-local storage avoids LiveSync moving an in-flight OAuth session
         // between desktop and mobile clients.
-        this.app.saveLocalStorage(LOCAL_STATE_KEY, state);
-        this.app.saveLocalStorage(LOCAL_VERIFIER_KEY, verifier);
+        this.app.saveLocalStorage(this.localStateKey, state);
+        this.app.saveLocalStorage(this.localVerifierKey, verifier);
 
         const params = new URLSearchParams({
             client_id: this.clientId,
@@ -100,8 +117,8 @@ export class GoogleAuthManager {
                 throw new Error('Missing OAuth code or state in callback.');
             }
 
-            const savedState = this.app.loadLocalStorage(LOCAL_STATE_KEY) as string | null;
-            const verifier = this.app.loadLocalStorage(LOCAL_VERIFIER_KEY) as string | null;
+            const savedState = this.app.loadLocalStorage(this.localStateKey) as string | null;
+            const verifier = this.app.loadLocalStorage(this.localVerifierKey) as string | null;
 
             if (!savedState || savedState !== params.state) {
                 throw new Error('Invalid OAuth state. Authentication was cancelled for security.');
@@ -153,7 +170,7 @@ export class GoogleAuthManager {
 
     async refreshAccessToken(): Promise<OAuth2Tokens> {
         if (!this.refreshToken) {
-            const stored = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
+            const stored = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
             if (!stored) throw new Error('No refresh token available.');
             this.refreshToken = stored;
         }
@@ -199,7 +216,7 @@ export class GoogleAuthManager {
         }
 
         // Refresh token is intentionally device-local and never enters data.json / LiveSync.
-        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, this.refreshToken);
+        this.app.secretStorage.setSecret(this.refreshTokenSecretId, this.refreshToken);
 
         // Remove legacy token copies from plugin settings when migrating from upstream.
         if (this.plugin.settings.oauth2Tokens ||
@@ -214,7 +231,20 @@ export class GoogleAuthManager {
 
     async loadSavedTokens(): Promise<boolean> {
         try {
-            const refreshToken = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
+            let refreshToken = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
+
+            // Migrate the pre-vault-scoping token once. The legacy slot is then
+            // cleared so two vaults cannot silently share authentication state.
+            if (!refreshToken) {
+                const legacy = this.app.secretStorage.getSecret(LEGACY_REFRESH_TOKEN_SECRET_ID);
+                if (legacy) {
+                    this.app.secretStorage.setSecret(this.refreshTokenSecretId, legacy);
+                    this.app.secretStorage.setSecret(LEGACY_REFRESH_TOKEN_SECRET_ID, '');
+                    refreshToken = legacy;
+                    LogUtils.debug('Migrated Google refresh token to vault-scoped SecretStorage');
+                }
+            }
+
             if (!refreshToken) return false;
 
             this.refreshToken = refreshToken;
@@ -255,7 +285,7 @@ export class GoogleAuthManager {
 
     async revokeAccess(): Promise<void> {
         const token = this.refreshToken
-            ?? this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
+            ?? this.app.secretStorage.getSecret(this.refreshTokenSecretId)
             ?? this.accessToken;
 
         if (token) {
@@ -274,7 +304,7 @@ export class GoogleAuthManager {
         this.accessToken = null;
         this.refreshToken = null;
         this.tokenExpiry = null;
-        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, '');
+        this.app.secretStorage.setSecret(this.refreshTokenSecretId, '');
         this.clearTemporaryAuthState();
 
         this.plugin.settings.oauth2Tokens = undefined;
@@ -293,13 +323,13 @@ export class GoogleAuthManager {
     isAuthenticated(): boolean {
         return Boolean(
             this.refreshToken ||
-            this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
+            this.app.secretStorage.getSecret(this.refreshTokenSecretId)
         );
     }
 
     private clearTemporaryAuthState(): void {
-        this.app.saveLocalStorage(LOCAL_STATE_KEY, null);
-        this.app.saveLocalStorage(LOCAL_VERIFIER_KEY, null);
+        this.app.saveLocalStorage(this.localStateKey, null);
+        this.app.saveLocalStorage(this.localVerifierKey, null);
     }
 
     private generateCodeVerifier(): string {
