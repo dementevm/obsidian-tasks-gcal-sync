@@ -469,16 +469,27 @@ export const store = createStore<TaskStore>()(
                                     }
                                 }, TIMING.SYNC_QUEUE_CHECK_INTERVAL_MS);
 
-                                set(state => {
-                                    state.syncQueueCheckerId = intervalId as unknown as number;
+                                const checkerId = intervalId as unknown as number;
+                                const safetyTimeoutId = window.setTimeout(() => {
+                                    const checkerState = get();
 
-                                    // Safety cleanup after timeout to avoid lingering intervals
-                                    state.syncQueueCheckerTimeout = window.setTimeout(() => {
-                                        if (state.syncQueueCheckerId) {
-                                            clearInterval(state.syncQueueCheckerId);
-                                            state.syncQueueCheckerId = null;
-                                        }
-                                    }, TIMING.SYNC_QUEUE_SAFETY_TIMEOUT_MS) as unknown as number;
+                                    // Only clean up the checker this timeout was
+                                    // created for. A newer rapid edit may already
+                                    // have installed a replacement interval.
+                                    if (checkerState.syncQueueCheckerId === checkerId) {
+                                        clearInterval(intervalId);
+                                        set(state => {
+                                            if (state.syncQueueCheckerId === checkerId) {
+                                                state.syncQueueCheckerId = null;
+                                            }
+                                            state.syncQueueCheckerTimeout = null;
+                                        });
+                                    }
+                                }, TIMING.SYNC_QUEUE_SAFETY_TIMEOUT_MS) as unknown as number;
+
+                                set(state => {
+                                    state.syncQueueCheckerId = checkerId;
+                                    state.syncQueueCheckerTimeout = safetyTimeoutId;
                                 });
                             }
                         }, delay) as unknown as number;
