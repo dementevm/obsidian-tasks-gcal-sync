@@ -304,15 +304,8 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('OAuth Redirect Bridge URL')
-            .setDesc('HTTPS URL of the static OAuth bridge. It must exactly match an Authorized redirect URI in your Google Cloud OAuth client.')
-            .addText(text => text
-                .setPlaceholder('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/')
-                .setValue(this.plugin.settings.oauthRedirectUri || '')
-                .onChange(async (value) => {
-                    this.plugin.settings.oauthRedirectUri = value.trim();
-                    await this.plugin.saveSettings();
-                }));
+            .setName('OAuth Redirect Bridge')
+            .setDesc('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/ — fixed by the public plugin for security. Register this exact URL as an Authorized redirect URI in Google Cloud.');
 
         const authNote = containerEl.createEl('div', { cls: 'setting-item-description' });
         authNote.style.marginTop = '0.75em';
