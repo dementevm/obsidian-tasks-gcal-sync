@@ -98,6 +98,8 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
         // Calendar Settings Section
         containerEl.createEl('h3', { text: 'Calendar Settings' });
 
+        const originalCalendarId = this.plugin.settings.calendarId || '';
+
         new Setting(containerEl)
             .setName('Calendar ID')
             .setDesc('Paste the full ID of a dedicated Google calendar. Using "primary" is allowed only after explicit confirmation.')
@@ -113,7 +115,7 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                             'A dedicated calendar is safer. Continue?'
                         );
                         if (!confirmed) {
-                            this.plugin.settings.calendarId = '';
+                            this.plugin.settings.calendarId = originalCalendarId;
                             this.plugin.settings.primaryCalendarConfirmed = false;
                             await this.plugin.saveSettings();
                             this.display();
@@ -123,7 +125,26 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     } else if (nextId !== 'primary') {
                         this.plugin.settings.primaryCalendarConfirmed = false;
                     }
+
+                    const calendarChanged = nextId !== this.plugin.settings.calendarId;
                     this.plugin.settings.calendarId = nextId;
+
+                    if (calendarChanged) {
+                        // Pending work belongs to the previous calendar target.
+                        // Do not let it execute after the target has changed.
+                        const state = useStore.getState();
+                        state.clearSyncTimeout();
+                        state.clearSyncQueueCheckers();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
+                        useStore.setState({
+                            failedSyncs: new Map(),
+                            error: null,
+                            status: state.authenticated ? 'connected' : 'disconnected'
+                        });
+                    }
+
                     await this.plugin.saveSettings();
                 }));
 
