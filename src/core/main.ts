@@ -632,10 +632,8 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             // Clean up any pending sync operations
             useStore.getState().clearSyncQueue();
 
-            // Clean up metadata
-            if (this.metadataManager) {
-                await this.metadataManager.cleanup();
-            }
+            // Do not run destructive metadata/calendar cleanup during unload.
+            // Orphan/duplicate cleanup is explicit and user-confirmed via Diagnostics.
 
             // Clean up UI elements
             if (this.statusBarItem) {
