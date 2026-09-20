@@ -75,29 +75,37 @@ export class TokenController {
                 try {
                     this.modifyLock = true
                     const content = await this.plugin.app.vault.read(file)
-                    const currentIds = new Set(
-                        Array.from(content.matchAll(this.ID_PATTERN))
-                            .map(match => match[1])
-                    )
+                    const lines = content.split('\n')
+                    const explicitlyUnscheduledIds = new Set<string>()
 
-                    let changed = false
-                    // Only remove IDs that no longer exist in the file
-                    // IMPORTANT: Only check tasks whose filePath matches this file
-                    // to avoid deleting tasks that belong to other files
-                    for (const [id, metadata] of Object.entries(this.plugin.settings.taskMetadata)) {
-                        if (metadata?.filePath && metadata.filePath !== file.path) {
-                            continue; // Skip tasks belonging to other files
-                        }
-                        if (!currentIds.has(id)) {
-                            const eventId = metadata?.eventId;
-                            await this.plugin.handleTaskDeletion(id, eventId);
-                            changed = true;
-                            LogUtils.debug(`Removed orphaned task ID: ${id}`);
+                    // Removing 📅 from a still-existing tracked line is an explicit
+                    // "stop syncing this item" action. Missing IDs alone are NOT
+                    // treated as deletions here because the line may have been moved
+                    // between files/devices.
+                    for (const line of lines) {
+                        const idMatch = line.match(/<!-- task-id: ([a-z0-9]+) -->/)
+                        if (idMatch && !this.isSyncItemLine(line)) {
+                            explicitlyUnscheduledIds.add(idMatch[1])
                         }
                     }
 
-                    if (changed) {
-                        await this.plugin.saveSettings()
+                    let updatedContent = content
+                    let changed = false
+                    for (const id of explicitlyUnscheduledIds) {
+                        const metadata = this.plugin.settings.taskMetadata[id]
+                        if (metadata?.filePath && metadata.filePath !== file.path) continue
+
+                        await this.plugin.handleTaskDeletion(id, metadata?.eventId)
+                        updatedContent = updatedContent.replace(
+                            new RegExp(`\\s*<!-- task-id: ${id} -->`, 'g'),
+                            ''
+                        )
+                        changed = true
+                        LogUtils.debug(`Stopped calendar tracking after 📅 removal: ${id}`)
+                    }
+
+                    if (changed && updatedContent !== content) {
+                        await this.plugin.app.vault.modify(file, updatedContent)
                     }
                 } catch (error) {
                     LogUtils.error(`File modification handler error: ${error}`)
