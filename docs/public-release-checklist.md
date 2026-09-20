@@ -136,7 +136,7 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 - [x] Compare current main with upstream by blob SHA; LICENSE is the only intentionally byte-identical file.
 - [x] Close obsolete PR #7 after transferring its useful freshness changes to main.
 - [x] Confirm README uses first-person `I wanted` wording.
-- [ ] Delete obsolete merged/closed development branches before changing repository visibility.
+- [x] Remove obsolete merged/closed development branches; only `main` and temporary release/documentation branches remain.
 
 ## Public release
 
@@ -145,13 +145,17 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 - [x] Change repository visibility from private to public.
 - [x] Confirm no private issue/PR/Actions-log content should remain private before changing visibility.
 - [x] Create/push the initial public tag exactly matching manifest.version (`1.0.0`, without a `v` prefix).
-- [ ] Create/push the maintenance tag exactly matching manifest.version (`1.0.1`, without a `v` prefix).
+- [x] Create/push the maintenance tag exactly matching manifest.version (`1.0.1`, without a `v` prefix).
 - [x] Verify the `1.0.0` Release workflow publishes:
   - tasks-gcal-sync-1.0.0.zip;
   - main.js;
   - manifest.json;
   - styles.css.
-- [ ] Verify the `1.0.1` Release workflow publishes the same required assets.
+- [x] Verify the `1.0.1` Release workflow publishes:
+  - tasks-gcal-sync-1.0.1.zip;
+  - main.js;
+  - manifest.json;
+  - styles.css.
 - [ ] Install the GitHub release once manually/with BRAT as a public beta.
 - [ ] Obtain Sasoon's explicit written approval in upstream issue #33, or follow the applicable Obsidian abandoned-fork process.
 - [ ] Submit the public repository to the Obsidian Community Plugins directory.
