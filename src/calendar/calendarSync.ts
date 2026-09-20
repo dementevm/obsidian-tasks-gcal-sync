@@ -710,8 +710,13 @@ export class CalendarSync {
                 return null;
             }
 
-            // Use the cached events instead of making a new request
-            const events = await this.findAllObsidianEvents();
+            const metadata = this.plugin.settings.taskMetadata[task.id];
+            const targetCalendarId = this.validateCalendarTarget(
+                metadata?.calendarId || this.plugin.settings.calendarId
+            );
+
+            // Search in the calendar this task is bound to.
+            const events = await this.findAllObsidianEvents({ calendarId: targetCalendarId });
             const matchingEvents = events.filter(event =>
                 event.extendedProperties?.private?.obsidianTaskId === task.id
             );
