@@ -332,6 +332,15 @@ export class CalendarSync {
             return;
         }
 
+        // Final safety boundary before any Google Calendar mutation. Queue state
+        // and metadata can outlive a scope change, so never trust callers alone.
+        const metadata = this.plugin.settings.taskMetadata[task.id];
+        const sourcePath = task.filePath || metadata?.filePath;
+        if (!sourcePath || !this.plugin.taskParser.isPathInScope(sourcePath)) {
+            LogUtils.warn(`Skipping calendar sync outside configured scope: ${sourcePath || task.id}`);
+            return;
+        }
+
         return this.withQueuedProcessing(task.id, async () => {
             try {
                 // Trust the task data from the caller — it was already freshly parsed
