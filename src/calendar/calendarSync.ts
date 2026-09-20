@@ -260,7 +260,11 @@ export class CalendarSync {
                     if (currentPromise) {
                         await currentPromise;
                     }
-                    return this.withLock(`task:${taskId}`, operation);
+                    // Re-enter through the queue instead of taking the same
+                    // calendar lock around the whole sync operation. This keeps
+                    // multiple follow-up edits serialized and avoids self-deadlock
+                    // when createEvent() later takes task:<id>.
+                    return this.withQueuedProcessing(taskId, operation);
                 }
             } catch (error) {
                 LogUtils.error(`Error checking task state for ${taskId}:`, error);
