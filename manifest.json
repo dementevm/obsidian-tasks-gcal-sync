@@ -1,7 +1,7 @@
 {
     "id": "obsidian-tasks-gcal-sync",
     "name": "Tasks Google Calendar Sync",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "minAppVersion": "1.11.4",
     "description": "Privacy-first sync from Obsidian Tasks to Google Calendar",
     "author": "Mikhail Dementev (based on Sasoon Sarkisian)",
