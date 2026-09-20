@@ -523,9 +523,6 @@ export const store = createStore<TaskStore>()(
                         return;
                     }
 
-                    // Check if we need to run repair
-                    const needsRepair = (state.autoSyncCount + 1) % state.REPAIR_INTERVAL === 0;
-
                     try {
                         // 2. Start sync with proper state tracking
                         set(state => {
@@ -544,16 +541,8 @@ export const store = createStore<TaskStore>()(
 
                         LogUtils.debug('🔄 Starting auto sync process');
 
-                        // Run repair if needed
-                        if (needsRepair && state.plugin.repairManager) {
-                            LogUtils.debug('Running periodic repair during auto sync');
-                            await state.plugin.repairManager.repairSyncState((progress) => {
-                                // Only log at significant milestones
-                                if (progress.processedItems % 10 === 0 || progress.processedItems === progress.totalItems) {
-                                    LogUtils.debug(`Repair progress: ${progress.phase} - ${progress.processedItems}/${progress.totalItems}`);
-                                }
-                            });
-                        }
+                        // Automatic repair/orphan cleanup is intentionally disabled.
+                        // Destructive cleanup must be an explicit user action.
 
                         // Get fresh task data for all queued tasks - WITH OPTIMIZATION
                         const taskData = new Map();
