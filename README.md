@@ -8,7 +8,7 @@ One-way, privacy-focused synchronization from dated Obsidian Tasks and lightweig
 
 This project started from [Sasoon/obsidian-gcal-sync](https://github.com/Sasoon/obsidian-gcal-sync), licensed under GPL-3.0.
 
-The upstream plugin provided the core idea and task-to-calendar synchronization model. This fork was created because the workflow we wanted had different privacy and safety requirements, especially for multi-device use:
+The upstream plugin provided the core idea and task-to-calendar synchronization model. This fork was created because the workflow I wanted had different privacy and safety requirements, especially for multi-device use:
 
 - no shared OAuth client secret embedded in the plugin;
 - no server-side token exchange controlled by the plugin author;
