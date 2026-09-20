@@ -231,15 +231,7 @@ export class CalendarSync {
     }
 
     private async withQueuedProcessing<T>(taskId: string, operation: () => Promise<T>): Promise<T | undefined> {
-        // First, check if task was recently synced, don't even try to process it
         const metadata = this.plugin.settings.taskMetadata[taskId];
-        if (metadata?.justSynced && metadata.syncTimestamp) {
-            const syncAge = Date.now() - metadata.syncTimestamp;
-            if (syncAge < 1500) {
-                LogUtils.debug(`Task ${taskId} was just synced ${syncAge}ms ago, skipping`);
-                return undefined;
-            }
-        }
 
         // ATOMIC CHECK-AND-ADD: Do this synchronously (no await) to prevent race conditions
         // JavaScript is single-threaded for synchronous operations
