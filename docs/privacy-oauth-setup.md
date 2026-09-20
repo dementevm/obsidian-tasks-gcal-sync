@@ -105,16 +105,15 @@ The following values are not written to the plugin's `data.json`:
 - Google refresh token — Obsidian SecretStorage
 - PKCE verifier/state — vault-local application storage
 
-This is intentional. LiveSync can sync the plugin's normal configuration, but
-OAuth secrets are provisioned independently on each device.
+This is intentional. LiveSync can sync the plugin's normal configuration and task metadata, but OAuth secrets are provisioned independently on each device. The plugin never expects a refresh token from another device.
 
 For a new iPhone or desktop:
 
 1. Sync/install the plugin.
-2. Create/select the same client-secret SecretStorage entry on that device.
-3. Run **Connect to Google** once on that device.
+2. Create/select the Client Secret SecretStorage entry on that device.
+3. Start Google authorization from the plugin ribbon icon or the `GCal: Disconnected` status item.
 
-Each device receives its own refresh token.
+Each device maintains its own local OAuth session and refresh token. **Disconnect Google Calendar on this device** clears only the current device's credentials; it does not revoke the Google OAuth grant for other connected devices. If Calendar API returns HTTP 401, the plugin tries one local access-token refresh before requiring a reconnect.
 
 ## Task syntax
 
@@ -126,3 +125,8 @@ Existing Sasoon task syntax is preserved:
 
 The Obsidian Tasks due date remains compatible while the plugin uses the time
 and reminder metadata for Google Calendar.
+
+
+## Multi-device release checks
+
+Before a release that changes OAuth, SecretStorage, setup transfer, or LiveSync behavior, run the multi-device section in [smoke-test.md](smoke-test.md). The release candidate must verify desktop + iOS independent authorization, device-local disconnect, 401 recovery, and LiveSync task updates without cross-device sign-out.
