@@ -350,14 +350,7 @@ export class CalendarSync {
                 const metadata = this.plugin.settings.taskMetadata[task.id];
 
                 // Only log task data once per sync operation
-                LogUtils.debug(`Processing task ${task.id}: ${JSON.stringify({
-                    title: task.title,
-                    date: task.date,
-                    time: task.time,
-                    reminder: task.reminder,
-                    completed: task.completed,
-                    filePath: task.filePath
-                })}`);
+                LogUtils.debug(`Processing calendar item ${task.id}`);
 
                 // ── FAST PATH: use metadata eventId as source of truth ──
                 // The events cache can be stale (up to 10s), which causes duplicates
@@ -609,9 +602,6 @@ export class CalendarSync {
                 url;
 
             LogUtils.debug(`Making API request: ${method} ${endpoint}`);
-            if (this.plugin.settings.verboseLogging) {
-                LogUtils.debug(`Request details: URL: ${requestUrlString}, Method: ${method}, Params: ${params ? JSON.stringify(params) : 'none'}`);
-            }
 
             try {
                 const response = await this.requestWithTimeout({
@@ -631,8 +621,7 @@ export class CalendarSync {
                 }
 
                 if (response.status >= 400) {
-                    // Log error details with sanitized response
-                    LogUtils.error(`API request failed (${method} ${endpoint}): Status: ${response.status}, Response: ${LogUtils.sanitize(response.text)}`);
+                    LogUtils.error(`API request failed (${method} ${endpoint}): Status: ${response.status}`);
 
                     const apiError: ApiError = new Error(`Request failed, status ${response.status}`);
                     apiError.status = response.status;
@@ -676,17 +665,14 @@ export class CalendarSync {
             shouldRetry: (error) => {
                 // Retry on network errors, timeouts, and 5xx/429 responses
                 if (error instanceof Error) {
-                    // Always retry on timeout
-                    if (error.message.includes('timeout')) {
-                        return true;
-                    }
+                    // POST event creation is not idempotent. Never retry it after
+                    // an ambiguous network failure, timeout, rate-limit response,
+                    // or server error because Google may already have created it.
+                    if (method === 'POST') return false;
+
+                    if (error.message.includes('timeout')) return true;
                     const status = (error as any).status;
                     if (status === 429) return true;
-
-                    // POST is not idempotent. If Google accepted the request but
-                    // the response was lost, blindly retrying can create a duplicate.
-                    // The next sync will reconcile by the private task ID instead.
-                    if (method === 'POST') return false;
 
                     // GET is read-only; PUT/DELETE target a concrete event ID.
                     return !status || status >= 500;
