@@ -68,15 +68,15 @@ https://www.googleapis.com/auth/calendar.events.owned
 
 ## Redirect bridge
 
-The canonical bridge for this private plugin is:
+The canonical bridge for the public plugin is:
 
 ```text
 https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/
 ```
 
 Its source is intentionally public in `dementevm/obsidian-tasks-gcal-sync-bridge`.
-It performs no server-side processing, stores nothing, and contains no client
-secret or refresh token.
+It performs no server-side processing, has no application-level persistence and contains no client
+secret or refresh token. GitHub Pages may process ordinary HTTP request metadata under GitHub's own policies.
 
 Use this URL exactly in Google Cloud, including the trailing slash.
 
@@ -94,7 +94,7 @@ cannot publish existing vault tasks.
 2. Set **OAuth Client ID**.
 3. Under **OAuth Client Secret**, create/select an Obsidian SecretStorage entry
    containing the Google OAuth client secret.
-4. Keep **OAuth Redirect Bridge URL** as `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`.
+4. Register the fixed bridge URL shown by the plugin exactly in the Google OAuth client.
 5. Connect to Google.
 
 ## Device-local secrets
