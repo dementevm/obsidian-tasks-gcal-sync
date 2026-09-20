@@ -1,4 +1,9 @@
 export class TimeUtils {
+    /** Current device IANA zone (for example Europe/Amsterdam or Asia/Seoul). */
+    static getLocalTimeZone(): string {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    }
+
     /**
      * Gets the timezone offset in the format +/-HH:mm
      */
@@ -57,7 +62,10 @@ export class TimeUtils {
      */
     static getCurrentDate(): string {
         const date = new Date();
-        return date.toISOString().split('T')[0];
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
     }
 
     /**
