@@ -1,0 +1,91 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-fund
+
+      - name: Security audit
+        run: npm audit
+
+      - name: Validate versions
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+
+          if (pkg.version !== manifest.version) {
+            throw new Error(
+              `Version mismatch: package.json=${pkg.version}, manifest.json=${manifest.version}`
+            );
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(versions, manifest.version)) {
+            throw new Error(
+              `versions.json does not contain manifest version ${manifest.version}`
+            );
+          }
+
+          if (versions[manifest.version] !== manifest.minAppVersion) {
+            throw new Error(
+              `versions.json[${manifest.version}]=${versions[manifest.version]} does not match manifest.minAppVersion=${manifest.minAppVersion}`
+            );
+          }
+
+          console.log(`Version metadata is consistent: ${manifest.version}`);
+          NODE
+
+      - name: Typecheck and build
+        run: npm run build
+
+      - name: Validate release files
+        shell: bash
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+
+      - name: Package installable artifact
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./manifest.json').version")"
+          mkdir -p "dist/tasks-gcal-sync"
+          cp main.js manifest.json styles.css "dist/tasks-gcal-sync/"
+          (
+            cd dist
+            zip -r "tasks-gcal-sync-${VERSION}.zip" tasks-gcal-sync
+          )
+
+      - name: Upload installable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tasks-gcal-sync-${{ github.sha }}
+          path: |
+            dist/tasks-gcal-sync/
+            dist/tasks-gcal-sync-*.zip
+          if-no-files-found: error
+          retention-days: 14
