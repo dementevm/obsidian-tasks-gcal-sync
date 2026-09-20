@@ -973,6 +973,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     }
 
     public async cleanupOrphansWithConfirmation(): Promise<void> {
+        this.validateSyncConfiguration();
         if (!this.repairManager) throw new Error('Repair manager not initialized.');
         const preview = await this.repairManager.previewOrphanCleanup();
 
