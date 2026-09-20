@@ -37,6 +37,7 @@ export class TokenController {
     private readonly ID_PATTERN = /<!-- task-id: ([a-z0-9]+) -->/g
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
     private readonly fileRepairPromises = new Map<string, Promise<boolean>>()
+    private readonly pendingDeletionTimers = new Map<string, number>()
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -311,6 +312,51 @@ export class TokenController {
         }
     }
 
+    private cancelPendingDeletion(taskId: string): void {
+        const timer = this.pendingDeletionTimers.get(taskId)
+        if (timer !== undefined) {
+            window.clearTimeout(timer)
+            this.pendingDeletionTimers.delete(taskId)
+        }
+    }
+
+    private scheduleMissingItemDeletion(taskId: string, sourceFilePath: string): void {
+        this.cancelPendingDeletion(taskId)
+
+        // Give file moves / LiveSync a grace window. Before deleting remotely we
+        // rescan the entire configured scope, so moving a tracked line does not
+        // become a false calendar deletion.
+        const timer = window.setTimeout(async () => {
+            this.pendingDeletionTimers.delete(taskId)
+
+            try {
+                const metadata = this.plugin.settings.taskMetadata[taskId]
+                if (!metadata || metadata.filePath !== sourceFilePath) return
+
+                const marker = `<!-- task-id: ${taskId} -->`
+                for (const candidate of this.plugin.taskParser.getFilteredFiles()) {
+                    const content = await this.plugin.app.vault.read(candidate)
+                    if (!content.includes(marker)) continue
+
+                    // The item was moved rather than deleted.
+                    if (candidate.path !== metadata.filePath) {
+                        metadata.filePath = candidate.path
+                        await this.plugin.saveSettings()
+                        LogUtils.debug(`Tracked item ${taskId} moved to ${candidate.path}; deletion cancelled`)
+                    }
+                    return
+                }
+
+                await this.plugin.handleTaskDeletion(taskId, metadata.eventId)
+                LogUtils.debug(`Deleted calendar event after tracked line removal: ${taskId}`)
+            } catch (error) {
+                LogUtils.error(`Delayed deletion check failed for ${taskId}: ${error}`)
+            }
+        }, 3000)
+
+        this.pendingDeletionTimers.set(taskId, timer)
+    }
+
     private registerEditorHandlers() {
         // Track edits and keep IDs in the Tasks-compatible position.
         this.plugin.registerEvent(
@@ -354,6 +400,22 @@ export class TokenController {
                     const content = await this.plugin.app.vault.read(file)
                     const lines = content.split('\n')
                     const explicitlyUnscheduledIds = new Set<string>()
+                    const currentIds = new Set(
+                        Array.from(content.matchAll(/<!-- task-id: ([a-z0-9]+) -->/g))
+                            .map(match => match[1])
+                    )
+
+                    // A tracked line that disappeared from its source file is a
+                    // deletion candidate. We verify it after a short grace period
+                    // across the full configured scope before touching Google.
+                    for (const [id, metadata] of Object.entries(this.plugin.settings.taskMetadata)) {
+                        if (metadata?.filePath !== file.path) continue
+                        if (currentIds.has(id)) {
+                            this.cancelPendingDeletion(id)
+                        } else {
+                            this.scheduleMissingItemDeletion(id, file.path)
+                        }
+                    }
 
                     // Removing 📅 from a still-existing tracked line is an explicit
                     // "stop syncing this item" action. Missing IDs alone are NOT
@@ -878,50 +940,60 @@ export class TokenController {
             return tr;
         });
 
-        // Add reminder shortcut conversion
-        const reminderConverter = EditorState.transactionFilter.of(tr => {
-            if (!tr.docChanged) return tr;
+        // Exact @ shortcuts are implemented at the CodeMirror transaction
+        // layer so they remain reliable even when Tasks' own EditorSuggest has
+        // priority over other suggest popups.
+        const calendarShortcutExpander = EditorState.transactionFilter.of(tr => {
+            if (!tr.docChanged) return tr
 
-            const changes: { from: number, to: number, insert: string }[] = [];
-            const doc = tr.newDoc;
+            const replacements: { from: number; to: number; insert: string }[] = []
+            const aliases: Record<string, string> = {
+                date: '📅 ',
+                time: '⏰ ',
+                rem: '🔔 ',
+                reminder: '🔔 ',
+                dur: '⏱',
+                duration: '⏱',
+                end: '➡️ ',
+                event: '📆 '
+            }
 
-            tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-                const text = inserted.toString();
-                if (text !== 'r') return;
+            tr.changes.iterChanges((_fromA, _toA, _fromB, toB) => {
+                const line = tr.newDoc.lineAt(toB)
+                if (!/^\s*-/.test(line.text)) return
 
-                // Get the line and ensure it's a task
-                const line = doc.lineAt(fromB);
-                if (!line.text.match(/^- \[[ x]\]/)) return;
+                const prefix = tr.newDoc.sliceString(line.from, toB)
+                const match = prefix.match(/@([a-z]+)$/i)
+                if (!match) return
 
-                // Look back for '@' character
-                const beforePos = fromB - 1;
-                if (beforePos < line.from) return;
+                const key = match[1].toLowerCase()
+                const replacement = aliases[key]
+                if (!replacement) return
 
-                const beforeChar = doc.sliceString(beforePos, fromB);
-                if (beforeChar !== '@') return;
+                const atOffset = prefix.length - match[0].length
+                const charBefore = atOffset > 0 ? prefix.charAt(atOffset - 1) : ''
+                if (charBefore && !/\s/.test(charBefore)) return
 
-                // Simply replace @r with the bell emoji at the cursor position
-                // This allows the user to add the time value before it gets moved
-                changes.push({
-                    from: beforePos,
-                    to: fromB + text.length,
-                    insert: "🔔"
-                });
-            });
+                // @event is a line-type shortcut, not task metadata. Only expand
+                // it immediately after a plain list marker.
+                if (key === 'event' && prefix.slice(0, atOffset).trim() !== '-') return
 
-            if (!changes.length) return tr;
+                replacements.push({
+                    from: line.from + atOffset,
+                    to: toB,
+                    insert: replacement
+                })
+            })
 
-            // Create a new transaction with our changes
-            return [tr, {
-                changes,
-                sequential: true
-            }];
-        });
+            if (replacements.length === 0) return tr
+            return [tr, { changes: replacements, sequential: true }]
+        })
 
         return [
             taskIdField,
             atomicRanges,
             preventDeletion,
+            calendarShortcutExpander,
             taskCreationPlugin,
             taskCompletionPlugin
         ];
