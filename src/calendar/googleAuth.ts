@@ -9,9 +9,8 @@ const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned';
 
 const LEGACY_CLIENT_SECRET_ID = 'obsidian-tasks-gcal-sync-client-secret';
-const CLIENT_SECRET_PREFIX = 'obsidian-tasks-gcal-sync-client-secret';
-const LEGACY_REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
-const REFRESH_TOKEN_SECRET_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
+const REFRESH_TOKEN_SECRET_ID = 'obsidian-tasks-gcal-sync-refresh-token';
+const LEGACY_SCOPED_REFRESH_TOKEN_PREFIX = 'obsidian-tasks-gcal-sync-refresh-token';
 const LOCAL_STATE_PREFIX = 'obsidian-tasks-gcal-sync-oauth-state';
 const LOCAL_VERIFIER_PREFIX = 'obsidian-tasks-gcal-sync-pkce-verifier';
 
@@ -37,14 +36,6 @@ export class GoogleAuthManager {
         return this.plugin.settings.vaultSecretNamespace || this.app.vault.getName();
     }
 
-    private get clientSecretId(): string {
-        return `${CLIENT_SECRET_PREFIX}:${this.secretNamespace}`;
-    }
-
-    private get refreshTokenSecretId(): string {
-        return `${REFRESH_TOKEN_SECRET_PREFIX}:${this.secretNamespace}`;
-    }
-
     private get localStateKey(): string {
         return `${LOCAL_STATE_PREFIX}:${this.secretNamespace}`;
     }
@@ -58,55 +49,25 @@ export class GoogleAuthManager {
     }
 
     private getClientSecret(): string | null {
-        // Canonical per-vault secret slot. SecretStorage values stay device-local,
-        // while the derived slot name is stable across devices for the same vault.
-        const canonical = this.app.secretStorage.getSecret(this.clientSecretId);
-        if (canonical) return canonical;
-
-        // Compatibility fallbacks for pre-vault-scoped builds.
         const configuredName = this.plugin.settings.clientSecretName?.trim();
         if (configuredName) {
             const configured = this.app.secretStorage.getSecret(configuredName);
             if (configured) return configured;
         }
 
+        // Compatibility with the first privacy fork migration.
         return this.app.secretStorage.getSecret(LEGACY_CLIENT_SECRET_ID);
     }
 
     public getClientSecretStatus(): { id: string; available: boolean; configuredName: string } {
+        const configuredName =
+            this.plugin.settings.clientSecretName?.trim() ||
+            LEGACY_CLIENT_SECRET_ID;
         return {
-            id: this.clientSecretId,
+            id: configuredName,
             available: Boolean(this.getClientSecret()),
-            configuredName: this.plugin.settings.clientSecretName?.trim() || ''
+            configuredName
         };
-    }
-
-    public migrateClientSecretToVaultScope(): boolean {
-        const existingCanonical = this.app.secretStorage.getSecret(this.clientSecretId);
-        if (existingCanonical) {
-            this.plugin.settings.clientSecretName = this.clientSecretId;
-            return true;
-        }
-
-        const candidates = [
-            this.plugin.settings.clientSecretName?.trim(),
-            LEGACY_CLIENT_SECRET_ID
-        ].filter((value): value is string => Boolean(value));
-
-        for (const candidate of Array.from(new Set(candidates))) {
-            const value = this.app.secretStorage.getSecret(candidate);
-            if (!value) continue;
-
-            this.app.secretStorage.setSecret(this.clientSecretId, value);
-            this.plugin.settings.clientSecretName = this.clientSecretId;
-            LogUtils.debug('Migrated OAuth client secret to vault-scoped SecretStorage');
-            return true;
-        }
-
-        // Keep the canonical name in synced settings even when this device has no
-        // value yet. The user can populate the same local SecretStorage slot here.
-        this.plugin.settings.clientSecretName = this.clientSecretId;
-        return false;
     }
 
     private validateConfiguration(): void {
@@ -222,7 +183,7 @@ export class GoogleAuthManager {
 
     async refreshAccessToken(): Promise<OAuth2Tokens> {
         if (!this.refreshToken) {
-            const stored = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
+            const stored = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
             if (!stored) throw new Error('No refresh token available.');
             this.refreshToken = stored;
         }
@@ -268,7 +229,7 @@ export class GoogleAuthManager {
         }
 
         // Refresh token is intentionally device-local and never enters data.json / LiveSync.
-        this.app.secretStorage.setSecret(this.refreshTokenSecretId, this.refreshToken);
+        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, this.refreshToken);
 
         // Remove legacy token copies from plugin settings when migrating from upstream.
         if (this.plugin.settings.oauth2Tokens ||
@@ -283,17 +244,19 @@ export class GoogleAuthManager {
 
     async loadSavedTokens(): Promise<boolean> {
         try {
-            let refreshToken = this.app.secretStorage.getSecret(this.refreshTokenSecretId);
+            let refreshToken = this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID);
 
-            // Migrate the pre-vault-scoping token once. The legacy slot is then
-            // cleared so two vaults cannot silently share authentication state.
+            // SecretStorage is already vault-scoped by Obsidian. Recover tokens
+            // written by private.4/private.5 under an extra namespace, then
+            // normalize back to the stable vault-local slot.
             if (!refreshToken) {
-                const legacy = this.app.secretStorage.getSecret(LEGACY_REFRESH_TOKEN_SECRET_ID);
-                if (legacy) {
-                    this.app.secretStorage.setSecret(this.refreshTokenSecretId, legacy);
-                    this.app.secretStorage.setSecret(LEGACY_REFRESH_TOKEN_SECRET_ID, '');
-                    refreshToken = legacy;
-                    LogUtils.debug('Migrated Google refresh token to vault-scoped SecretStorage');
+                const legacyScopedId =
+                    `${LEGACY_SCOPED_REFRESH_TOKEN_PREFIX}:${this.secretNamespace}`;
+                const scoped = this.app.secretStorage.getSecret(legacyScopedId);
+                if (scoped) {
+                    this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, scoped);
+                    refreshToken = scoped;
+                    LogUtils.debug('Recovered refresh token from redundant scoped SecretStorage slot');
                 }
             }
 
@@ -337,7 +300,7 @@ export class GoogleAuthManager {
 
     async revokeAccess(): Promise<void> {
         const token = this.refreshToken
-            ?? this.app.secretStorage.getSecret(this.refreshTokenSecretId)
+            ?? this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
             ?? this.accessToken;
 
         if (token) {
@@ -356,7 +319,7 @@ export class GoogleAuthManager {
         this.accessToken = null;
         this.refreshToken = null;
         this.tokenExpiry = null;
-        this.app.secretStorage.setSecret(this.refreshTokenSecretId, '');
+        this.app.secretStorage.setSecret(REFRESH_TOKEN_SECRET_ID, '');
         this.clearTemporaryAuthState();
 
         this.plugin.settings.oauth2Tokens = undefined;
@@ -375,7 +338,7 @@ export class GoogleAuthManager {
     isAuthenticated(): boolean {
         return Boolean(
             this.refreshToken ||
-            this.app.secretStorage.getSecret(this.refreshTokenSecretId)
+            this.app.secretStorage.getSecret(REFRESH_TOKEN_SECRET_ID)
         );
     }
 
