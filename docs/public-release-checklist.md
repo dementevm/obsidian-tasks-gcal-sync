@@ -69,7 +69,7 @@ Status date: 2026-09-20
   - tag/package/manifest/versions consistency checks;
   - clean build and audit;
   - automatic GitHub Release with ZIP, main.js, manifest.json, and styles.css.
-- [ ] Confirm the new Build workflow is green on the release-preparation commit.
+- [x] Confirm the new Build workflow is green on the release-preparation commit.
 
 ## Functional smoke test
 
@@ -97,7 +97,7 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 
 ## Merge gate
 
-- [ ] Build workflow is green for chore/community-release-prep.
+- [x] Build workflow is green for chore/community-release-prep.
 - [ ] Merge PR #6 into feature/separate-calendar.
 - [ ] Confirm feature/separate-calendar is green and contains all release-prep commits.
 - [ ] Merge the finished feature branch into default main.
