@@ -196,8 +196,13 @@ export class CalendarSync {
 
                 // Check if the event still exists and is valid
                 const metadata = this.plugin.settings.taskMetadata[task.id];
-                if (!metadata || metadata.eventId !== eventId) {
-                    LogUtils.debug(`Event ${eventId} no longer associated with task ${task.id}, skipping update`);
+                const currentCalendarId = this.plugin.settings.calendarId.trim();
+                if (!metadata ||
+                    metadata.eventId !== eventId ||
+                    metadata.calendarId !== currentCalendarId) {
+                    LogUtils.debug(
+                        `Event ${eventId} is not associated with task ${task.id} in calendar ${currentCalendarId}, skipping direct update`
+                    );
                     return;
                 }
 
