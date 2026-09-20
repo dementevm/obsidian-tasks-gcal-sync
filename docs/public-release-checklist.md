@@ -65,7 +65,10 @@ Status date: 2026-09-20
 - [x] Replace dynamic require() for task IDs with static imports and remove Math.random() ID fallbacks.
 - [x] Tighten error/retry/logging types and remove unused logging/retry helpers.
 - [x] Remove unused legacy repair interfaces.
-- [x] Update GitHub Actions runtime to checkout/setup-node v5 with Node 24.
+- [x] Update GitHub Actions runtime to current v7 actions with Node 24.
+- [x] Update TypeScript build tooling to 5.9.3 with refreshed Node 22 typings.
+- [x] Align the production esbuild target with ES2021 and enable production minification.
+- [x] Preserve HTTP status/code metadata when normalizing Calendar API errors so retry policy can distinguish retryable from non-retryable failures.
 - [x] Fix all strict-TypeScript issues exposed by the refreshed configuration.
 - [x] Confirm the refreshed repository builds successfully in GitHub Actions.
 
@@ -121,11 +124,25 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 - [x] Merge the finished feature branch into default main.
 - [x] Confirm Build workflow is green on main.
 
+## Pre-public audit
+
+- [x] Scan all current text files for Google client secrets/API keys, OAuth access tokens, GitHub tokens, private keys, local user paths, and private IPv4 addresses.
+- [x] Confirm `.env`, `data.json`, `credentials.json`, `token.json`, and `googleConfig.json` were never committed in repository history.
+- [x] Review historical shared-OAuth/config removals; only the already-public upstream OAuth Client ID is present, with no user secret.
+- [x] Review all issue/PR bodies and comments; no private credentials, local paths, or user data found.
+- [x] Review the final Build Actions log for sensitive-value patterns; no matches found.
+- [x] Review every remaining branch's OAuth/main/settings/README surface for sensitive values; no matches found.
+- [x] Confirm there are currently no Git tags or GitHub Releases.
+- [x] Compare current main with upstream by blob SHA; LICENSE is the only intentionally byte-identical file.
+- [x] Close obsolete PR #7 after transferring its useful freshness changes to main.
+- [x] Confirm README uses first-person `I wanted` wording.
+- [ ] Delete obsolete merged/closed development branches before changing repository visibility.
+
 ## Public release
 
 - [x] Bump the release version consistently in package.json, package-lock.json, manifest.json, and versions.json (1.0.0).
 - [ ] Change repository visibility from private to public.
-- [ ] Confirm no private issue/PR/Actions-log content should remain private before changing visibility.
+- [x] Confirm no private issue/PR/Actions-log content should remain private before changing visibility.
 - [ ] Create/push a tag exactly matching manifest.version (for example 1.0.0, never v1.0.0).
 - [ ] Verify the Release workflow publishes:
   - tasks-gcal-sync-<version>.zip;
