@@ -38,6 +38,8 @@ export interface Task {
 export interface TaskMetadata {
     filePath?: string;
     eventId?: string;
+    /** Calendar that owns eventId. eventId must never be reused against another calendar. */
+    calendarId?: string;
     title: string;
     date: string;
     time?: string;
