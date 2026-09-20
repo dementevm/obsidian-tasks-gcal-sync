@@ -205,6 +205,14 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
             // Initialize TokenController
             this.tokenController = new TokenController(this);
+
+            // Older versions stored <!-- task-id --> at the end of the task
+            // line, which prevents Obsidian Tasks from parsing recurrence and
+            // date metadata to its left. Migrate before registering auto-sync
+            // handlers so moving the private marker cannot create calendar
+            // churn.
+            await this.tokenController.migrateTaskIdsForTasksCompatibility();
+
             const extension = this.tokenController.getExtension();
             this.registerEditorExtension([extension]);
 
