@@ -656,8 +656,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         const storedSettings = await this.loadData() || {};
         this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings);
 
-        // v2 changes the personal-workflow defaults introduced during desktop
-        // smoke testing: five-minute timed items and 09:00 morning reminders.
+        // v2 changed personal-workflow defaults during initial smoke testing.
         if ((storedSettings.settingsSchemaVersion ?? 0) < 2) {
             if (storedSettings.defaultEventDurationMinutes === undefined ||
                 storedSettings.defaultEventDurationMinutes === 30) {
@@ -665,9 +664,37 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             }
             this.settings.defaultMorningEventTime =
                 storedSettings.defaultMorningEventTime || '09:00';
-            this.settings.settingsSchemaVersion = 2;
-            await this.saveSettings();
         }
+
+        // v3 makes scope/calendar safety explicit and splits reminder profiles.
+        if ((storedSettings.settingsSchemaVersion ?? 0) < 3) {
+            this.settings.scanEntireVault = storedSettings.scanEntireVault ?? false;
+            this.settings.defaultTimedTaskReminderMinutes =
+                storedSettings.defaultTimedTaskReminderMinutes ??
+                storedSettings.defaultReminder ??
+                30;
+            this.settings.defaultInformationalEventReminderMinutes =
+                storedSettings.defaultInformationalEventReminderMinutes ?? 0;
+            this.settings.allDayTaskRemindersEnabled =
+                storedSettings.allDayTaskRemindersEnabled ?? false;
+            this.settings.defaultAllDayTaskReminderMinutes =
+                storedSettings.defaultAllDayTaskReminderMinutes ?? 0;
+
+            // Never infer consent to mutate the primary calendar.
+            if (this.settings.calendarId === 'primary') {
+                this.settings.primaryCalendarConfirmed = false;
+            }
+        }
+
+        if (!this.settings.vaultSecretNamespace) {
+            const generated = typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            this.settings.vaultSecretNamespace = generated;
+        }
+
+        this.settings.settingsSchemaVersion = 3;
+        await this.saveSettings();
 
         // One-time migration from the upstream plugin, where the OAuth client
         // secret could be stored directly in data.json.
