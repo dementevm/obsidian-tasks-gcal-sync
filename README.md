@@ -2,7 +2,7 @@
 
 One-way, privacy-focused synchronization from dated Obsidian Tasks and lightweight calendar reminders to Google Calendar.
 
-> **Status:** release candidate. The current build has completed the desktop, iOS, LiveSync, OAuth, recurrence, scope-safety, restart and diagnostics smoke test. The official Obsidian Community Plugins submission still requires a public repository/release and completion of Obsidian's fork-policy process.
+> **Status:** public beta. The repository and GitHub Releases are public, and the desktop/iOS/LiveSync/OAuth/recurrence/scope-safety/restart/diagnostics smoke test has passed. Submission to the official Obsidian Community Plugins directory is pending completion of Obsidian's fork-policy requirements and directory review.
 
 ## Why this project exists
 

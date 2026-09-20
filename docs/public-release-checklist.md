@@ -132,7 +132,7 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 - [x] Review all issue/PR bodies and comments; no private credentials, local paths, or user data found.
 - [x] Review the final Build Actions log for sensitive-value patterns; no matches found.
 - [x] Review every remaining branch's OAuth/main/settings/README surface for sensitive values; no matches found.
-- [x] Confirm there are currently no Git tags or GitHub Releases.
+- [x] Confirm there were no Git tags or GitHub Releases before the initial public release.
 - [x] Compare current main with upstream by blob SHA; LICENSE is the only intentionally byte-identical file.
 - [x] Close obsolete PR #7 after transferring its useful freshness changes to main.
 - [x] Confirm README uses first-person `I wanted` wording.
@@ -140,15 +140,18 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
 
 ## Public release
 
-- [x] Bump the release version consistently in package.json, package-lock.json, manifest.json, and versions.json (1.0.0).
-- [ ] Change repository visibility from private to public.
+- [x] Bump the initial public release version consistently in package.json, package-lock.json, manifest.json, and versions.json (1.0.0).
+- [x] Prepare maintenance release metadata consistently for 1.0.1.
+- [x] Change repository visibility from private to public.
 - [x] Confirm no private issue/PR/Actions-log content should remain private before changing visibility.
-- [ ] Create/push a tag exactly matching manifest.version (for example 1.0.0, never v1.0.0).
-- [ ] Verify the Release workflow publishes:
-  - tasks-gcal-sync-<version>.zip;
+- [x] Create/push the initial public tag exactly matching manifest.version (`1.0.0`, without a `v` prefix).
+- [ ] Create/push the maintenance tag exactly matching manifest.version (`1.0.1`, without a `v` prefix).
+- [x] Verify the `1.0.0` Release workflow publishes:
+  - tasks-gcal-sync-1.0.0.zip;
   - main.js;
   - manifest.json;
   - styles.css.
+- [ ] Verify the `1.0.1` Release workflow publishes the same required assets.
 - [ ] Install the GitHub release once manually/with BRAT as a public beta.
 - [ ] Obtain Sasoon's explicit written approval in upstream issue #33, or follow the applicable Obsidian abandoned-fork process.
 - [ ] Submit the public repository to the Obsidian Community Plugins directory.
