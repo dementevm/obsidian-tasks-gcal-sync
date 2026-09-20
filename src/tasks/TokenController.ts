@@ -36,6 +36,9 @@ export class TokenController {
     private modifyLock = false
     private readonly ID_PATTERN = /<!-- task-id: ([a-z0-9]+) -->/g
     private readonly COMPLETION_PATTERN = /✅ \d{4}-\d{2}-\d{2}/g
+    private readonly fileRepairPromises = new Map<string, Promise<boolean>>()
+    private readonly pendingDeletionTimers = new Map<string, number>()
+    private readonly pendingViewReconciliations = new WeakSet<EditorView>()
     private lastEditTime: number = 0
 
     constructor(plugin: GoogleCalendarSyncPlugin) {
@@ -43,12 +46,383 @@ export class TokenController {
         this.registerEditorHandlers()
     }
 
+    private generateFreshTaskId(usedIds: Set<string>): string {
+        const { IdUtils } = require('../utils/idUtils')
+
+        let id = IdUtils.generateTimeBasedId()
+        while (usedIds.has(id)) {
+            id = IdUtils.generateTimeBasedId()
+        }
+
+        usedIds.add(id)
+        return id
+    }
+
+    /**
+     * Keep the plugin's private ID before user text and before any Obsidian Tasks
+     * metadata. Obsidian Tasks parses its metadata from right to left and stops
+     * at unknown trailing text, so an HTML comment at the end of the line breaks
+     * recurrence/date parsing.
+     *
+     * Canonical forms:
+     * - [ ] <!-- task-id: ... --> title ... 📅 YYYY-MM-DD
+     * - 📆 <!-- task-id: ... --> title ... 📅 YYYY-MM-DD
+     */
+    public normalizeSyncItemLineForTasksCompatibility(line: string): string {
+        const idMatches = Array.from(line.matchAll(this.ID_PATTERN))
+        if (idMatches.length === 0) return line
+
+        const taskIdText = idMatches[0][0]
+
+        // Fast path: if the private ID is already directly after the task/event
+        // marker and every complete calendar-only token is already in the
+        // metadata prefix, leave the line byte-for-byte untouched. In
+        // particular, do not collapse spaces while the user is editing a title:
+        // replacing the whole line for cosmetic whitespace changes can move the
+        // CodeMirror cursor back to the start of the task.
+        if (idMatches.length === 1) {
+            const canonicalMatch = line.match(
+                /^(\s*-\s+(?:\[[ xX]\]|📆))\s+(<!-- task-id: [a-z0-9]+ -->)(.*)$/
+            )
+
+            if (canonicalMatch) {
+                let tail = canonicalMatch[3].trimStart()
+                const tokenAtStart =
+                    /^(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+                const tokenAnywhere =
+                    /(?:^|\s)(?:⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])(?=\s|$)/i
+
+                while (true) {
+                    const prefixToken = tail.match(tokenAtStart)
+                    if (!prefixToken) break
+                    tail = tail.slice(prefixToken[0].length).trimStart()
+                }
+
+                if (!tokenAnywhere.test(tail)) {
+                    return line
+                }
+            }
+        }
+
+        let withoutIds = line.replace(this.ID_PATTERN, '')
+
+        const anchorMatch =
+            withoutIds.match(/^(\s*-\s+\[[ xX]\])(?:\s+|$)/) ||
+            withoutIds.match(/^(\s*-\s+📆)(?:\s+|$)/)
+
+        if (!anchorMatch) return line
+
+        let remainder = withoutIds.slice(anchorMatch[0].length).trim()
+        remainder = remainder.replace(/[ \t]{2,}/g, ' ')
+
+        // Our calendar-only metadata is unknown to Obsidian Tasks. Keep all
+        // of it immediately after the private ID so the user-visible title and
+        // Tasks-owned metadata (recurrence, due date, done date, etc.) remain
+        // contiguous at the end of the line. Tasks parses its metadata from the
+        // end, so a trailing ⏰/➡️/⏱/🔔 token can otherwise hide recurrence.
+        const calendarMetadataPatterns = [
+            /⏰\s*\d{1,2}:\d{2}/,
+            /➡️\s*\d{1,2}:\d{2}/,
+            /⏱\s*\d+[mh]/,
+            /🔔\s*\d+[mhd]/
+        ]
+
+        const calendarMetadata: string[] = []
+        for (const pattern of calendarMetadataPatterns) {
+            const match = remainder.match(pattern)
+            if (!match) continue
+            calendarMetadata.push(match[0])
+            remainder = remainder.replace(match[0], ' ')
+        }
+
+        remainder = remainder
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim()
+
+        return [
+            anchorMatch[1],
+            taskIdText,
+            ...calendarMetadata,
+            remainder
+        ].filter(Boolean).join(' ')
+    }
+
+    public repairSyncContentForRecurringTasks(content: string): {
+        content: string
+        changed: boolean
+        reassigned: number
+    } {
+        if (!content.includes('<!-- task-id:')) {
+            return { content, changed: false, reassigned: 0 }
+        }
+
+        const lines = content.split('\n')
+        let changed = false
+        let reassigned = 0
+
+        // First normalize hidden-ID placement so Obsidian Tasks can parse all
+        // recurrence/date metadata regardless of editor mode.
+        for (let i = 0; i < lines.length; i++) {
+            if (!this.isSyncItemLine(lines[i]) ||
+                !/<!-- task-id: [a-z0-9]+ -->/.test(lines[i])) {
+                continue
+            }
+
+            const normalized = this.normalizeSyncItemLineForTasksCompatibility(lines[i])
+            if (normalized !== lines[i]) {
+                lines[i] = normalized
+                changed = true
+            }
+        }
+
+        // Then repair IDs copied by Obsidian Tasks when it materializes the next
+        // recurring occurrence. The completed occurrence keeps the original ID;
+        // every other copy gets a fresh identity before calendar sync can see it.
+        const groups = new Map<string, number[]>()
+        const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
+        for (let i = 0; i < lines.length; i++) {
+            if (!this.isSyncItemLine(lines[i])) continue
+
+            const match = lines[i].match(/<!-- task-id: ([a-z0-9]+) -->/)
+            if (!match) continue
+
+            usedIds.add(match[1])
+            const indexes = groups.get(match[1]) || []
+            indexes.push(i)
+            groups.set(match[1], indexes)
+        }
+
+        for (const [duplicatedId, indexes] of groups) {
+            if (indexes.length < 2) continue
+
+            const completedIndex = indexes.find(index =>
+                /^\s*-\s+\[[xX]\]/.test(lines[index])
+            )
+            const keeperIndex = completedIndex ?? indexes[0]
+
+            for (const index of indexes) {
+                if (index === keeperIndex) continue
+
+                const freshId = this.generateFreshTaskId(usedIds)
+                lines[index] = this.normalizeSyncItemLineForTasksCompatibility(
+                    lines[index].replace(
+                        `<!-- task-id: ${duplicatedId} -->`,
+                        `<!-- task-id: ${freshId} -->`
+                    )
+                )
+                changed = true
+                reassigned++
+
+                LogUtils.debug(
+                    `Reassigned file-level recurring task ID ${duplicatedId} -> ${freshId}`
+                )
+            }
+        }
+
+        return {
+            content: changed ? lines.join('\n') : content,
+            changed,
+            reassigned
+        }
+    }
+
+    /**
+     * Repair a Markdown file independently of CodeMirror. This is the critical
+     * path for Reading mode/mobile, where Obsidian Tasks updates the vault but
+     * there may be no active editor transaction for us to observe.
+     */
+    public async repairTaskIdsInFile(file: TFile): Promise<boolean> {
+        const existing = this.fileRepairPromises.get(file.path)
+        if (existing) return existing
+
+        const repairPromise = (async () => {
+            const content = await this.plugin.app.vault.read(file)
+            const repaired = this.repairSyncContentForRecurringTasks(content)
+            if (!repaired.changed) return false
+
+            this.modifyLock = true
+            try {
+                await this.plugin.app.vault.modify(file, repaired.content)
+            } finally {
+                this.modifyLock = false
+            }
+
+            LogUtils.debug(
+                `Repaired recurring IDs in ${file.path}; reassigned=${repaired.reassigned}`
+            )
+            return true
+        })()
+
+        this.fileRepairPromises.set(file.path, repairPromise)
+        try {
+            return await repairPromise
+        } finally {
+            if (this.fileRepairPromises.get(file.path) === repairPromise) {
+                this.fileRepairPromises.delete(file.path)
+            }
+        }
+    }
+
+    public normalizeTaskIdsInView(view: EditorView): boolean {
+        const doc = view.state.doc
+        const changes: { from: number, to: number, insert: string }[] = []
+
+        for (let i = 1; i <= doc.lines; i++) {
+            const line = doc.line(i)
+            const hasId = /<!-- task-id: [a-z0-9]+ -->/.test(line.text)
+
+            // Recover an ID pushed to its own line by an edit.
+            if (hasId && !this.isSyncItemLine(line.text) && i > 1) {
+                const idText = line.text.match(/<!-- task-id: [a-z0-9]+ -->/)?.[0]
+                const prevLine = doc.line(i - 1)
+                if (idText && this.isSyncItemLine(prevLine.text) &&
+                    !/<!-- task-id: [a-z0-9]+ -->/.test(prevLine.text)) {
+                    const updatedPrev = this.normalizeSyncItemLineForTasksCompatibility(
+                        `${prevLine.text} ${idText}`
+                    )
+                    changes.push({ from: prevLine.from, to: prevLine.to, insert: updatedPrev })
+
+                    const cleanedCurrent = line.text.replace(idText, '').trim()
+                    changes.push({ from: line.from, to: line.to, insert: cleanedCurrent })
+                    continue
+                }
+            }
+
+            if (!hasId || !this.isSyncItemLine(line.text)) continue
+
+            let normalized = this.normalizeSyncItemLineForTasksCompatibility(line.text)
+
+            // Removing a completion state should also remove a stale completion date.
+            this.COMPLETION_PATTERN.lastIndex = 0
+            if (/^\s*-\s+\[ \]/.test(normalized) && this.COMPLETION_PATTERN.test(normalized)) {
+                this.COMPLETION_PATTERN.lastIndex = 0
+                normalized = normalized
+                    .replace(this.COMPLETION_PATTERN, '')
+                    .replace(/[ \t]{2,}/g, ' ')
+                    .trimEnd()
+                normalized = this.normalizeSyncItemLineForTasksCompatibility(normalized)
+            }
+            this.COMPLETION_PATTERN.lastIndex = 0
+
+            if (normalized !== line.text) {
+                changes.push({ from: line.from, to: line.to, insert: normalized })
+            }
+        }
+
+        if (changes.length === 0) return false
+
+        // A structural repair can replace a complete line. CodeMirror maps a
+        // cursor inside a replaced range to the left edge by default, which
+        // feels like the editor suddenly jumped to the beginning of the task.
+        // Preserve the current selection and prefer the right edge of changed
+        // ranges so normal typing never jumps back to the checkbox.
+        const changeSet = view.state.changes(changes)
+        const mappedSelection = view.state.selection.map(changeSet, 1)
+        view.dispatch({
+            changes: changeSet,
+            selection: mappedSelection
+        })
+        return true
+    }
+
+    /**
+     * One-time-on-load compatibility pass over files the plugin is already
+     * allowed to inspect. This intentionally honours the feature branch's vault
+     * scanning scope instead of reading the whole vault implicitly.
+     */
+    public async migrateTaskIdsForTasksCompatibility(): Promise<void> {
+        const candidatePaths = new Set<string>()
+
+        for (const metadata of Object.values(this.plugin.settings.taskMetadata)) {
+            if (metadata.filePath) candidatePaths.add(metadata.filePath)
+        }
+
+        for (const file of this.plugin.app.vault.getMarkdownFiles()) {
+            if (this.plugin.taskParser.isFileInScope(file)) {
+                candidatePaths.add(file.path)
+            }
+        }
+
+        let changedFiles = 0
+
+        for (const path of candidatePaths) {
+            const abstractFile = this.plugin.app.vault.getAbstractFileByPath(path)
+            if (!(abstractFile instanceof TFile)) continue
+
+            try {
+                if (await this.repairTaskIdsInFile(abstractFile)) {
+                    changedFiles++
+                }
+            } catch (error) {
+                LogUtils.error(`Failed to repair task IDs in ${path}: ${error}`)
+            }
+        }
+
+        if (changedFiles > 0) {
+            LogUtils.info(
+                `Tasks compatibility repair updated ${changedFiles} file(s)`
+            )
+        }
+    }
+
+    private cancelPendingDeletion(taskId: string): void {
+        const timer = this.pendingDeletionTimers.get(taskId)
+        if (timer !== undefined) {
+            window.clearTimeout(timer)
+            this.pendingDeletionTimers.delete(taskId)
+        }
+    }
+
+    private scheduleMissingItemDeletion(taskId: string, sourceFilePath: string): void {
+        this.cancelPendingDeletion(taskId)
+
+        // Give file moves / LiveSync a grace window. Before deleting remotely we
+        // rescan the entire configured scope, so moving a tracked line does not
+        // become a false calendar deletion.
+        const timer = window.setTimeout(async () => {
+            this.pendingDeletionTimers.delete(taskId)
+
+            try {
+                const metadata = this.plugin.settings.taskMetadata[taskId]
+                if (!metadata || metadata.filePath !== sourceFilePath) return
+
+                const marker = `<!-- task-id: ${taskId} -->`
+                for (const candidate of this.plugin.taskParser.getFilteredFiles()) {
+                    const content = await this.plugin.app.vault.read(candidate)
+                    if (!content.includes(marker)) continue
+
+                    // The item was moved rather than deleted.
+                    if (candidate.path !== metadata.filePath) {
+                        metadata.filePath = candidate.path
+                        await this.plugin.saveSettings()
+                        LogUtils.debug(`Tracked item ${taskId} moved to ${candidate.path}; deletion cancelled`)
+                    }
+                    return
+                }
+
+                await this.plugin.handleTaskDeletion(taskId, metadata.eventId)
+                LogUtils.debug(`Deleted calendar event after tracked line removal: ${taskId}`)
+            } catch (error) {
+                LogUtils.error(`Delayed deletion check failed for ${taskId}: ${error}`)
+            }
+        }, 3000)
+
+        this.pendingDeletionTimers.set(taskId, timer)
+    }
+
     private registerEditorHandlers() {
-        // Track edits and ensure IDs stay at end of lines
+        // Track edits and keep IDs in the Tasks-compatible position.
         this.plugin.registerEvent(
             this.plugin.app.workspace.on('editor-change', debounce((editor: Editor) => {
+                const file = this.plugin.app.workspace.getActiveFile()
+                if (!(file instanceof TFile) || !this.plugin.taskParser.isFileInScope(file)) {
+                    return
+                }
+
                 this.lastEditTime = Date.now()
-                this.ensureIdsAtEndOfLines(editor)
+                this.ensureIdsAfterMarker(editor)
+                this.ensureUniqueTaskIds(editor)
                 this.checkForNewTasks(editor)
                 this.handleTaskCompletionChanges(editor)
             }, 1000))
@@ -71,33 +445,65 @@ export class TokenController {
         this.plugin.registerEvent(
             this.plugin.app.vault.on('modify', async (file: TFile) => {
                 if (this.modifyLock) return
+                if (!this.plugin.taskParser.isFileInScope(file)) return
 
                 try {
+                    // Reading mode has no CodeMirror editor transaction. Repair
+                    // recurring IDs at the vault level before any calendar-sync
+                    // handler can safely consume this file.
+                    if (await this.repairTaskIdsInFile(file)) {
+                        return
+                    }
+
                     this.modifyLock = true
                     const content = await this.plugin.app.vault.read(file)
+                    const lines = content.split('\n')
+                    const explicitlyUnscheduledIds = new Set<string>()
                     const currentIds = new Set(
-                        Array.from(content.matchAll(this.ID_PATTERN))
+                        Array.from(content.matchAll(/<!-- task-id: ([a-z0-9]+) -->/g))
                             .map(match => match[1])
                     )
 
-                    let changed = false
-                    // Only remove IDs that no longer exist in the file
-                    // IMPORTANT: Only check tasks whose filePath matches this file
-                    // to avoid deleting tasks that belong to other files
+                    // A tracked line that disappeared from its source file is a
+                    // deletion candidate. We verify it after a short grace period
+                    // across the full configured scope before touching Google.
                     for (const [id, metadata] of Object.entries(this.plugin.settings.taskMetadata)) {
-                        if (metadata?.filePath && metadata.filePath !== file.path) {
-                            continue; // Skip tasks belonging to other files
-                        }
-                        if (!currentIds.has(id)) {
-                            const eventId = metadata?.eventId;
-                            await this.plugin.handleTaskDeletion(id, eventId);
-                            changed = true;
-                            LogUtils.debug(`Removed orphaned task ID: ${id}`);
+                        if (metadata?.filePath !== file.path) continue
+                        if (currentIds.has(id)) {
+                            this.cancelPendingDeletion(id)
+                        } else {
+                            this.scheduleMissingItemDeletion(id, file.path)
                         }
                     }
 
-                    if (changed) {
-                        await this.plugin.saveSettings()
+                    // Removing 📅 from a still-existing tracked line is an explicit
+                    // "stop syncing this item" action. Missing IDs alone are NOT
+                    // treated as deletions here because the line may have been moved
+                    // between files/devices.
+                    for (const line of lines) {
+                        const idMatch = line.match(/<!-- task-id: ([a-z0-9]+) -->/)
+                        if (idMatch && !this.isSyncItemLine(line)) {
+                            explicitlyUnscheduledIds.add(idMatch[1])
+                        }
+                    }
+
+                    let updatedContent = content
+                    let changed = false
+                    for (const id of explicitlyUnscheduledIds) {
+                        const metadata = this.plugin.settings.taskMetadata[id]
+                        if (metadata?.filePath && metadata.filePath !== file.path) continue
+
+                        await this.plugin.handleTaskDeletion(id, metadata?.eventId)
+                        updatedContent = updatedContent.replace(
+                            new RegExp(`\\s*<!-- task-id: ${id} -->`, 'g'),
+                            ''
+                        )
+                        changed = true
+                        LogUtils.debug(`Stopped calendar tracking after 📅 removal: ${id}`)
+                    }
+
+                    if (changed && updatedContent !== content) {
+                        await this.plugin.app.vault.modify(file, updatedContent)
                     }
                 } catch (error) {
                     LogUtils.error(`File modification handler error: ${error}`)
@@ -122,67 +528,126 @@ export class TokenController {
 
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
-            // Look for unchecked tasks with task IDs
-            if (line.text.match(/^\s*- \[ \].*?<!-- task-id: ([a-z0-9]+) -->/)) {
-                // Check if there are completion markers to clean up
-                const hasCompletionMarkers = line.text.match(this.COMPLETION_PATTERN)
+            if (!/^\s*-\s+\[ \]/.test(line.text) ||
+                !/<!-- task-id: [a-z0-9]+ -->/.test(line.text)) {
+                continue
+            }
 
-                if (hasCompletionMarkers) {
-                    LogUtils.debug(`Found unticked task with completion markers: ${line.text}`)
+            this.COMPLETION_PATTERN.lastIndex = 0
+            if (!this.COMPLETION_PATTERN.test(line.text)) {
+                this.COMPLETION_PATTERN.lastIndex = 0
+                continue
+            }
+            this.COMPLETION_PATTERN.lastIndex = 0
 
-                    // Get task ID
-                    const idMatch = line.text.match(this.ID_PATTERN)
-                    const taskId = idMatch ? idMatch[1] : null
+            let newLine = line.text
+                .replace(this.COMPLETION_PATTERN, '')
+                .replace(/[ \t]{2,}/g, ' ')
+                .trimEnd()
+            newLine = this.normalizeSyncItemLineForTasksCompatibility(newLine)
 
-                    // Check for reminder
-                    const reminderMatch = line.text.match(/🔔\s*(\d+)([mhd])/)
-                    const reminderText = reminderMatch ? reminderMatch[0] : null
-
-                    // Remove all completion markers from the line
-                    let newLine = line.text.replace(this.COMPLETION_PATTERN, '')
-                    // Clean up any extra whitespace
-                    newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                    // Ensure ID is at the end and reminder is at the beginning after checkbox
-                    // Remove the ID and reminder first
-                    if (taskId) {
-                        newLine = newLine.replace(this.ID_PATTERN, '')
-                    }
-                    if (reminderText) {
-                        newLine = newLine.replace(reminderText, '')
-                    }
-                    newLine = newLine.trim()
-
-                    // Find the position after the checkbox for reminder
-                    const checkboxMatch = newLine.match(/^(\s*- \[[ xX]\] )/)
-                    if (checkboxMatch) {
-                        // Add reminder after checkbox
-                        if (reminderText) {
-                            newLine = newLine.replace(checkboxMatch[0], checkboxMatch[0] + `${reminderText} `)
-                        }
-
-                        // Add ID at the end
-                        if (taskId) {
-                            newLine = newLine + ` <!-- task-id: ${taskId} -->`
-                        }
-                    }
-
-                    LogUtils.debug(`Cleaning up completion markers in unticked task: ${taskId}`)
-                    LogUtils.debug(`Original line: ${line.text}`)
-                    LogUtils.debug(`Updated line: ${newLine}`)
-
-                    changes.push({
-                        from: line.from,
-                        to: line.to,
-                        insert: newLine
-                    })
-                }
+            if (newLine !== line.text) {
+                changes.push({
+                    from: line.from,
+                    to: line.to,
+                    insert: newLine
+                })
             }
         }
 
         if (changes.length > 0) {
             view.dispatch({ changes })
         }
+    }
+
+    private isSyncItemLine(line: string): boolean {
+        // Plain checklists are not calendar items. A tracked item must explicitly
+        // contain a calendar date marker so shopping lists / arbitrary checklists
+        // remain completely untouched by this plugin.
+        const isTaskOrEvent = /^\s*-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
+        return isTaskOrEvent && /📅\s*\d{4}-\d{2}-\d{2}/.test(line);
+    }
+
+    private ensureUniqueTaskIds(editor: Editor): void {
+        // @ts-ignore - cm exists on editor but is not typed
+        const view = editor.cm as EditorView
+        if (!view) return
+        this.ensureUniqueTaskIdsInView(view)
+    }
+
+    public ensureUniqueTaskIdsInView(view: EditorView): boolean {
+        // Obsidian Tasks creates a recurring occurrence by copying the complete
+        // task line, including our hidden ID. The old implementation removed
+        // the copied ID and expected checkForNewTasks() to add another one, but
+        // preventDeletion intentionally blocks standalone task-id deletion.
+        //
+        // Replace the copied ID atomically instead. Replacing the whole line is
+        // treated as a normal task edit by the protection filter and guarantees
+        // that auto-sync sees the new occurrence with a distinct identity.
+        const groups = new Map<string, Array<{
+            line: any
+            completed: boolean
+            match: RegExpMatchArray
+        }>>()
+
+        const usedIds = new Set<string>(Object.keys(this.plugin.settings.taskMetadata))
+
+        for (let i = 1; i <= view.state.doc.lines; i++) {
+            const line = view.state.doc.line(i)
+            const match = line.text.match(/<!-- task-id: ([a-z0-9]+) -->/)
+            if (!match) continue
+
+            usedIds.add(match[1])
+
+            const entries = groups.get(match[1]) || []
+            entries.push({
+                line,
+                completed: /^\s*-\s+\[[xX]\]/.test(line.text),
+                match
+            })
+            groups.set(match[1], entries)
+        }
+
+        const changes: { from: number; to: number; insert: string }[] = []
+
+        for (const [duplicatedId, entries] of groups) {
+            if (entries.length < 2) continue
+
+            // Recurrence creates a completed old occurrence plus an active new
+            // occurrence. Preserve the completed occurrence's ID so its existing
+            // Google event/metadata remains associated with the task that was
+            // actually completed.
+            const keeper = entries.find(entry => entry.completed) || entries[0]
+
+            for (const entry of entries) {
+                if (entry === keeper) continue
+
+                const freshId = this.generateFreshTaskId(usedIds)
+                const newMarker = `<!-- task-id: ${freshId} -->`
+                const updatedLine = this.normalizeSyncItemLineForTasksCompatibility(
+                    entry.line.text.replace(entry.match[0], newMarker)
+                )
+
+                changes.push({
+                    from: entry.line.from,
+                    to: entry.line.to,
+                    insert: updatedLine
+                })
+
+                LogUtils.debug(
+                    `Reassigned copied recurring task ID ${duplicatedId} -> ${freshId}`
+                )
+            }
+        }
+
+        if (changes.length === 0) return false
+
+        // CodeMirror accepts multiple full-line replacements in document order.
+        changes.sort((a, b) => a.from - b.from)
+        view.dispatch({ changes })
+
+        LogUtils.debug(`Reassigned ${changes.length} duplicated recurring task ID(s)`)
+        return true
     }
 
     private checkForNewTasks(editor: Editor) {
@@ -193,179 +658,39 @@ export class TokenController {
         const doc = view.state.doc
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
-            if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(this.ID_PATTERN)) {
-                LogUtils.debug(`Found new task at line ${i}: ${line.text}`)
+            if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
+                LogUtils.debug(`Found new sync item at line ${i}`)
                 this.generateTaskId(view, line.from)
             }
         }
     }
 
-    private ensureIdsAtEndOfLines(editor: Editor) {
+    private ensureIdsAfterMarker(editor: Editor) {
         // @ts-ignore - cm exists on editor but is not typed
         const view = editor.cm as EditorView
         if (!view) return
+        this.normalizeTaskIdsInView(view)
+    }
 
-        const doc = view.state.doc
-        const changes: { from: number, to: number, insert: string }[] = []
+    /**
+     * CodeMirror does not allow EditorView.dispatch() while ViewPlugin.update()
+     * is running. Defer hidden-ID normalization until the current update stack
+     * has completed, and coalesce nested updates caused by our own dispatches.
+     */
+    private scheduleViewReconciliation(view: EditorView): void {
+        if (this.pendingViewReconciliations.has(view)) return
+        this.pendingViewReconciliations.add(view)
 
-        for (let i = 1; i <= doc.lines; i++) {
-            const line = doc.line(i)
-            // Look for tasks with task IDs
-            const taskIdMatches = [...line.text.matchAll(this.ID_PATTERN)]
-
-            // Also look for reminders
-            const reminderMatch = line.text.match(/🔔\s*(\d+)([mhd])/)
-
-            // Handle task IDs that might be on wrong lines after line breaks
-            if (taskIdMatches.length > 0 && !line.text.match(/^.*?- \[[ x]\].*/)) {
-                // Found a task ID on a non-task line - move it to the previous task line
-                const taskId = taskIdMatches[0][0]
-                LogUtils.debug(`Found orphaned task ID on line ${i}: ${taskId}`)
-                
-                // Look for the previous task line
-                if (i > 1) {
-                    const prevLine = doc.line(i - 1)
-                    if (prevLine.text.match(/^.*?- \[[ x]\].*/) && !prevLine.text.match(this.ID_PATTERN)) {
-                        // Previous line is a task without an ID - move the ID there
-                        changes.push({
-                            from: prevLine.from,
-                            to: prevLine.to,
-                            insert: prevLine.text.trim() + ' ' + taskId
-                        })
-                        
-                        // Remove the ID from current line
-                        const cleanedLine = line.text.replace(this.ID_PATTERN, '').trim()
-                        if (cleanedLine) {
-                            changes.push({
-                                from: line.from,
-                                to: line.to,
-                                insert: cleanedLine
-                            })
-                        } else {
-                            // Line is empty after removing ID, remove the entire line
-                            changes.push({
-                                from: line.from - (i > 1 ? 1 : 0), // Include preceding newline if not first line
-                                to: line.to,
-                                insert: ''
-                            })
-                        }
-                        continue
-                    }
-                }
+        window.setTimeout(() => {
+            try {
+                this.normalizeTaskIdsInView(view)
+                this.ensureUniqueTaskIdsInView(view)
+            } catch (error) {
+                LogUtils.error(`Deferred editor reconciliation failed: ${error}`)
+            } finally {
+                this.pendingViewReconciliations.delete(view)
             }
-
-            if (line.text.match(/^.*?- \[[ x]\].*/)) {
-                let needsUpdate = false
-                let newLine = line.text
-
-                // Handle IDs first - ensure they're at the end
-                if (taskIdMatches.length > 0) {
-                    // Check if there are multiple IDs (the issue)
-                    if (taskIdMatches.length > 1) {
-                        LogUtils.debug(`Found multiple task IDs in line: ${line.text}`)
-
-                        // Keep only the first ID
-                        const firstId = taskIdMatches[0][0]
-                        // Remove all IDs from the line
-                        newLine = newLine.replace(this.ID_PATTERN, '')
-                        // Clean up any extra whitespace
-                        newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                        // Add the ID at the end of the line
-                        newLine = newLine + ' ' + firstId
-                        needsUpdate = true
-                    }
-                    // If ID exists but is not at the end of the line
-                    else {
-                        const idMatch = taskIdMatches[0]
-                        const idText = idMatch[0]
-                        
-                        // Check if ID is already at the end (with optional whitespace)
-                        const isAtEnd = newLine.trim().endsWith(idText.trim())
-                        
-                        if (!isAtEnd) {
-                            // Remove the ID from its current position
-                            newLine = newLine.replace(idText, '')
-                            // Clean up any extra whitespace
-                            newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                            // Add the ID at the end of the line
-                            newLine = newLine + ' ' + idText
-                            needsUpdate = true
-                        }
-                    }
-                }
-
-                // Handle reminders - keep them near the beginning after the checkbox
-                if (reminderMatch) {
-                    const reminderText = reminderMatch[0]
-                    const reminderIndex = newLine.indexOf(reminderText)
-
-                    // Find the position after the checkbox
-                    const checkboxMatch = newLine.match(/^(\s*- \[[ xX]\] )/)
-                    if (checkboxMatch) {
-                        const insertPos = checkboxMatch[0].length
-
-                        // Only move if the reminder is not already near the beginning
-                        if (reminderIndex > insertPos + 10) { // Allow some flexibility
-                            // Remove the reminder from its current position
-                            newLine = newLine.replace(reminderText, '')
-                            // Clean up any extra whitespace
-                            newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                            // Insert the reminder after the checkbox
-                            newLine = newLine.replace(checkboxMatch[0], checkboxMatch[0] + reminderText + ' ')
-                            needsUpdate = true
-                        }
-                    }
-                }
-
-                // Check for unchecked tasks with completion markers
-                const isUnchecked = line.text.match(/^.*?- \[ \].*/)
-                if (isUnchecked) {
-                    const hasCompletionMarkers = line.text.match(this.COMPLETION_PATTERN)
-                    if (hasCompletionMarkers) {
-                        LogUtils.debug(`Found unticked task with completion markers during ID check: ${line.text}`)
-
-                        // Get the current ID
-                        const taskId = taskIdMatches.length > 0 ? taskIdMatches[0][1] : null
-
-                        // Create a new line without completion markers
-                        newLine = newLine.replace(this.COMPLETION_PATTERN, '')
-                        // Clean up any extra whitespace
-                        newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                        // Remove the ID temporarily
-                        newLine = newLine.replace(this.ID_PATTERN, '').trim()
-
-                        // Add the ID back at the end
-                        if (taskId) {
-                            const taskIdText = `<!-- task-id: ${taskId} -->`
-                            newLine = newLine + ' ' + taskIdText
-                        }
-
-                        LogUtils.debug(`Cleaning up completion markers in unticked task during ID check: ${taskId}`)
-                        LogUtils.debug(`Original line: ${line.text}`)
-                        LogUtils.debug(`Updated line: ${newLine}`)
-
-                        needsUpdate = true
-                    }
-                }
-
-                // Only push changes if we actually modified the line
-                if (needsUpdate && newLine !== line.text) {
-                    changes.push({
-                        from: line.from,
-                        to: line.to,
-                        insert: newLine
-                    })
-                }
-            }
-        }
-
-        if (changes.length > 0) {
-            view.dispatch({ changes })
-        }
+        }, 0)
     }
 
     public getExtension(): Extension[] {
@@ -377,8 +702,16 @@ export class TokenController {
         const taskCreationPlugin = ViewPlugin.fromClass(class {
             private lastChangeTime = 0;
 
+            constructor(view: EditorView) {
+                controller.scheduleViewReconciliation(view);
+            }
+
             update(update: ViewUpdate) {
                 if (!update.docChanged) return;
+
+                // Any operation that dispatches a follow-up transaction must
+                // happen after this ViewPlugin.update() callback has returned.
+                controller.scheduleViewReconciliation(update.view);
 
                 const currentTime = Date.now();
                 if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
@@ -392,96 +725,11 @@ export class TokenController {
 
                     for (let pos = startLine.from; pos <= endLine.to;) {
                         const line = doc.lineAt(pos);
-                        if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(idPattern)) {
+                        if (controller.isSyncItemLine(line.text) && !line.text.match(idPattern)) {
                             LogUtils.debug(`Real-time task detection: Found new task at line ${line.number}`);
                             controller.generateTaskId(update.view, line.from);
                         }
                         pos = line.to + 1;
-                    }
-                });
-            }
-        });
-
-        // Add task completion state change detector
-        const taskCompletionPlugin = ViewPlugin.fromClass(class {
-            private lastChangeTime = 0;
-
-            update(update: ViewUpdate) {
-                if (!update.docChanged) return;
-
-                const currentTime = Date.now();
-                if (currentTime - this.lastChangeTime < 100) return; // Debounce rapid changes
-                this.lastChangeTime = currentTime;
-
-                // Process changes to detect task toggling
-                update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-                    const oldDoc = update.startState.doc;
-                    const newDoc = update.state.doc;
-
-                    // Find the lines of the changes
-                    const oldStartLine = oldDoc.lineAt(fromA);
-                    const newStartLine = newDoc.lineAt(fromB);
-
-                    // Check if this might be a task checkbox toggle
-                    const oldLineText = oldStartLine.text;
-                    const newLineText = newStartLine.text;
-
-                    // Check if the line had an ID (to ensure we're dealing with our tracked tasks)
-                    const taskIdMatch = newLineText.match(controller.ID_PATTERN);
-                    if (!taskIdMatch) return;
-
-                    const taskId = taskIdMatch[1];
-
-                    // Check if this is a task being unticked (checkbox state changed from '[x]' to '[ ]')
-                    const wasChecked = oldLineText.match(/^\s*- \[[xX]\]/);
-                    const isNowUnchecked = newLineText.match(/^\s*- \[ \]/);
-
-                    if (wasChecked && isNowUnchecked) {
-                        LogUtils.debug(`Task ${taskId} was unticked - will remove completion markers`);
-
-                        // Look for completion markers on the line
-                        const hasCompletionMarkers = newLineText.match(controller.COMPLETION_PATTERN);
-
-                        // Check for reminder using the bell emoji (U+1F514)
-                        const reminderPattern = /\u{1F514}\s*(\d+)([mhd])/u;
-                        const reminderMatch = newLineText.match(reminderPattern);
-                        const reminderText = reminderMatch ? reminderMatch[0] : null;
-
-                        if (hasCompletionMarkers) {
-                            LogUtils.debug(`Detected completion markers on unticked task ${taskId} - cleaning up`);
-
-                            // Remove all completion markers
-                            let cleanedLine = newLineText.replace(controller.COMPLETION_PATTERN, '');
-                            // Clean up extra whitespace
-                            cleanedLine = cleanedLine.replace(/\s+/g, ' ').trim();
-
-                            // Ensure the ID is at the end and reminder is at the beginning after checkbox
-                            // Remove the ID and reminder
-                            cleanedLine = cleanedLine.replace(controller.ID_PATTERN, '').trim();
-                            if (reminderText) {
-                                cleanedLine = cleanedLine.replace(reminderText, '').trim();
-                            }
-
-                            // Find the position after the checkbox for reminder
-                            const checkboxMatch = cleanedLine.match(/^(\s*- \[[ xX]\] )/);
-                            if (checkboxMatch) {
-                                // Add reminder after checkbox
-                                if (reminderText) {
-                                    cleanedLine = cleanedLine.replace(checkboxMatch[0], checkboxMatch[0] + reminderText + ' ');
-                                }
-
-                                // Add ID at the end
-                                cleanedLine = cleanedLine + ' ' + taskIdMatch[0];
-                            }
-
-                            LogUtils.debug(`Original line: ${newLineText}`);
-                            LogUtils.debug(`Cleaned line: ${cleanedLine}`);
-
-                            // Apply the change
-                            update.view.dispatch({
-                                changes: [{ from: newStartLine.from, to: newStartLine.to, insert: cleanedLine }]
-                            });
-                        }
                     }
                 });
             }
@@ -498,8 +746,8 @@ export class TokenController {
                     const oldDoc = tr.startState.doc.toString();
 
                     // Get all task lines and their IDs from both states
-                    const oldMatches = Array.from(oldDoc.matchAll(/^.*?- \[[ x]\].*?(<!-- task-id: [a-z0-9]+ -->)/gm));
-                    const newMatches = Array.from(newDoc.matchAll(/^.*?- \[[ x]\].*?(<!-- task-id: [a-z0-9]+ -->)/gm));
+                    const oldMatches = Array.from(oldDoc.matchAll(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/gm));
+                    const newMatches = Array.from(newDoc.matchAll(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/gm));
 
                     // If we have fewer task IDs but the same number of tasks, prevent the change
                     // This catches standalone ID deletions while allowing task operations
@@ -584,7 +832,7 @@ export class TokenController {
 
                     // Check if the line contains a task
                     const line = content.slice(lineStart, lineEnd);
-                    const isTaskLine = line.match(/^.*?- \[[ xX]\]/);
+                    const isTaskLine = /^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(line);
 
                     // Make the ID atomic only if it's in a task line and not being deleted as part of the whole line
                     if (isTaskLine) {
@@ -612,7 +860,7 @@ export class TokenController {
 
             tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
                 const line = tr.startState.doc.lineAt(fromA);
-                const taskMatch = line.text.match(/^.*?- \[[ xX]\].*?(<!-- task-id: [a-z0-9]+ -->)/);
+                const taskMatch = line.text.match(/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+).*?(<!-- task-id: [a-z0-9]+ -->)/);
                 const insertedText = inserted.toString();
 
                 // Allow complete line deletion (when a line is fully deleted and replaced with nothing)
@@ -629,17 +877,12 @@ export class TokenController {
                             const taskId = idMatch[1];
                             LogUtils.debug(`Task line deletion detected for task ${taskId}`);
 
-                            // Schedule task cleanup asynchronously with a short delay
-                            // to ensure the edit completes first
-                            setTimeout(() => {
-                                try {
-                                    const metadata = this.plugin.settings.taskMetadata[taskId];
-                                    this.plugin.handleTaskDeletion(taskId, metadata?.eventId)
-                                        .catch(error => LogUtils.error(`Error cleaning up deleted task ${taskId}: ${error}`));
-                                } catch (error) {
-                                    LogUtils.error(`Error scheduling task deletion for ${taskId}: ${error}`);
-                                }
-                            }, 100);
+                            // Defer remote deletion and verify the item did not
+                            // move to another in-scope file (cut/paste, rename, LiveSync).
+                            const metadata = this.plugin.settings.taskMetadata[taskId];
+                            if (metadata?.filePath) {
+                                this.scheduleMissingItemDeletion(taskId, metadata.filePath);
+                            }
                         }
                     }
                     return; // Always allow line deletions
@@ -660,7 +903,7 @@ export class TokenController {
                         }
 
                         // For line breaks within task content, let CodeMirror handle naturally
-                        // We'll fix the ID position in a post-processing step via the ensureIdsAtEndOfLines method
+                        // We'll fix the ID position in a post-processing step via normalizeTaskIdsInView
                         // This prevents the character duplication bug caused by conflicting transaction handling
 
                         // Always allow the line break to proceed naturally
@@ -672,7 +915,7 @@ export class TokenController {
                         // Entire line is being modified
                         (line.text.trim() === tr.startState.sliceDoc(fromA, toA).trim()) ||
                         // New task is being pasted
-                        (insertedText.match(/^- \[[ xX]\]/));
+                        (/^-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(insertedText));
 
                     // Block if trying to modify just the ID
                     if (!isWholeTaskOperation &&
@@ -685,8 +928,8 @@ export class TokenController {
                 // Check for standalone ID deletion (but not if deleting the entire line)
                 const deletedText = tr.startState.sliceDoc(fromA, toA);
                 if (deletedText.match(this.ID_PATTERN) &&
-                    !deletedText.match(/^.*?- \[[ xX]\]/) &&
-                    !insertedText.match(/^.*?- \[[ xX]\]/) &&
+                    !/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(deletedText) &&
+                    !/^.*?-\s+(?:\[[ xX]\]\s+|📆\s+)/.test(insertedText) &&
                     !isLineDeletion) {
                     shouldBlock = true;
                     return;
@@ -704,53 +947,68 @@ export class TokenController {
             return tr;
         });
 
-        // Add reminder shortcut conversion
-        const reminderConverter = EditorState.transactionFilter.of(tr => {
-            if (!tr.docChanged) return tr;
+        // Exact @ shortcuts are implemented at the CodeMirror transaction
+        // layer so they remain reliable even when Tasks' own EditorSuggest has
+        // priority over other suggest popups.
+        const calendarShortcutExpander = EditorState.transactionFilter.of(tr => {
+            if (!tr.docChanged) return tr
 
-            const changes: { from: number, to: number, insert: string }[] = [];
-            const doc = tr.newDoc;
+            const replacements: { from: number; to: number; insert: string }[] = []
+            const aliases: Record<string, string> = {
+                date: '📅 ',
+                time: '⏰ ',
+                rem: '🔔 ',
+                reminder: '🔔 ',
+                dur: '⏱',
+                duration: '⏱',
+                end: '➡️ ',
+                event: '📆 '
+            }
 
-            tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-                const text = inserted.toString();
-                if (text !== 'r') return;
+            tr.changes.iterChanges((_fromA, _toA, _fromB, toB) => {
+                const line = tr.newDoc.lineAt(toB)
+                if (!/^\s*-/.test(line.text)) return
 
-                // Get the line and ensure it's a task
-                const line = doc.lineAt(fromB);
-                if (!line.text.match(/^- \[[ x]\]/)) return;
+                const prefix = tr.newDoc.sliceString(line.from, toB)
+                const match = prefix.match(/@([a-z]+)$/i)
+                if (!match) return
 
-                // Look back for '@' character
-                const beforePos = fromB - 1;
-                if (beforePos < line.from) return;
+                const key = match[1].toLowerCase()
+                const replacement = aliases[key]
+                if (!replacement) return
 
-                const beforeChar = doc.sliceString(beforePos, fromB);
-                if (beforeChar !== '@') return;
+                const atOffset = prefix.length - match[0].length
+                const charBefore = atOffset > 0 ? prefix.charAt(atOffset - 1) : ''
+                const beforeAt = prefix.slice(0, atOffset)
+                const followsCalendarMetadata =
+                    /(?:📅\s*\d{4}-\d{2}-\d{2}|⏰\s*\d{1,2}:\d{2}|➡️\s*\d{1,2}:\d{2}|⏱\s*\d+[mh]|🔔\s*\d+[mhd])$/i
+                        .test(beforeAt)
+                if (charBefore && !/\s/.test(charBefore) && !followsCalendarMetadata) return
 
-                // Simply replace @r with the bell emoji at the cursor position
-                // This allows the user to add the time value before it gets moved
-                changes.push({
-                    from: beforePos,
-                    to: fromB + text.length,
-                    insert: "🔔"
-                });
-            });
+                // @event is a line-type shortcut, not task metadata. Only expand
+                // it immediately after a plain list marker.
+                if (key === 'event' && prefix.slice(0, atOffset).trim() !== '-') return
 
-            if (!changes.length) return tr;
+                const leadingSpace =
+                    charBefore && !/\s/.test(charBefore) ? ' ' : ''
 
-            // Create a new transaction with our changes
-            return [tr, {
-                changes,
-                sequential: true
-            }];
-        });
+                replacements.push({
+                    from: line.from + atOffset,
+                    to: toB,
+                    insert: leadingSpace + replacement
+                })
+            })
+
+            if (replacements.length === 0) return tr
+            return [tr, { changes: replacements, sequential: true }]
+        })
 
         return [
             taskIdField,
             atomicRanges,
             preventDeletion,
-            reminderConverter,
-            taskCreationPlugin,
-            taskCompletionPlugin
+            calendarShortcutExpander,
+            taskCreationPlugin
         ];
     }
 
@@ -766,44 +1024,52 @@ export class TokenController {
             const now = Date.now();
             const line = view.state.doc.lineAt(pos);
             const file = this.plugin.app.workspace.getActiveFile();
-            if (!file) {
-                LogUtils.error('No active file found');
+            if (!(file instanceof TFile)) {
+                LogUtils.error('No active Markdown file found');
                 return '';
             }
-
-            LogUtils.debug('Generating ID for line:', line.text);
-
+            if (!this.plugin.taskParser.isFileInScope(file)) {
+                LogUtils.debug(`Skipping task ID generation outside sync scope: ${file.path}`);
+                return '';
+            }
+            LogUtils.debug('Generating ID for calendar-tracked line');
             // Check if line already has an ID
             if (line.text.match(this.ID_PATTERN)) {
                 LogUtils.debug('Line already has an ID');
                 return '';
             }
 
-            // Check if this is a task line
-            const taskMatch = line.text.match(/^\s*- \[[ x]\] (.+)/)
-            if (!taskMatch) {
-                LogUtils.debug('Not a task line');
+            // IDs are shared by checkbox tasks and 📆 informational events.
+            if (!this.isSyncItemLine(line.text)) {
+                LogUtils.debug('Not a sync item line');
                 return '';
             }
+
+            const kind: 'task' | 'event' = /^\s*-\s+📆\s+/.test(line.text) ? 'event' : 'task';
 
             // Create the task ID
             const taskId = `<!-- task-id: ${id} -->`;
 
-            // Insert the ID at the end of the line
-            // This helps with tag parsing and general readability
-            let transaction;
+            // Keep the private marker directly after the checkbox (or 📆 event
+            // marker). Putting it at the end breaks Obsidian Tasks recurrence
+            // parsing because Tasks stops at unknown trailing metadata.
+            const anchorMatch =
+                line.text.match(/^(\s*-\s+\[[ xX]\])/) ||
+                line.text.match(/^(\s*-\s+📆)/);
 
-            // Find the end of the line
-            const insertPos = line.to;
+            if (!anchorMatch) {
+                LogUtils.debug('Could not locate task/event marker');
+                return '';
+            }
 
-            // Insert the ID at the end of the task line
-            const changes = [{
-                from: insertPos,
-                to: insertPos,
-                insert: ` ${taskId}`
-            }];
-
-            transaction = view.state.update({ changes });
+            const insertPos = line.from + anchorMatch[1].length;
+            const transaction = view.state.update({
+                changes: [{
+                    from: insertPos,
+                    to: insertPos,
+                    insert: ` ${taskId}`
+                }]
+            });
             view.dispatch(transaction);
 
             // Store metadata about this task
@@ -812,9 +1078,13 @@ export class TokenController {
                 lastModified: now,
                 lastSynced: now,
                 eventId: '', // Will be filled when synced with Google Calendar
-                title: line.text.replace(/^\s*- \[[ xX]\] /, ''),
+                filePath: file.path,
+                kind,
+                title: line.text
+                    .replace(/^\s*- \[[ xX]\]\s*/, '')
+                    .replace(/^\s*-\s+📆\s*/, ''),
                 date: new Date().toISOString().split('T')[0],
-                completed: line.text.indexOf('- [x]') >= 0 || line.text.indexOf('- [X]') >= 0,
+                completed: kind === 'task' && (line.text.indexOf('- [x]') >= 0 || line.text.indexOf('- [X]') >= 0),
             };
             this.plugin.saveSettings();
 
@@ -852,7 +1122,7 @@ export class TokenController {
                     const line = item.view.state.doc.lineAt(item.pos);
 
                     // Only generate ID if line is a task and doesn't already have an ID
-                    if (line.text.match(/^\s*- \[[ x]\] /) && !line.text.match(this.ID_PATTERN)) {
+                    if (this.isSyncItemLine(line.text) && !line.text.match(this.ID_PATTERN)) {
                         const id = this._generateTaskId(item.view, item.pos);
                         if (id) {
                             LogUtils.debug(`Added ID to new task: ${id}`);

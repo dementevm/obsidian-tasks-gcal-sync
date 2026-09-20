@@ -18,7 +18,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
         date: boolean;
         time: boolean;
         endTime: boolean;
+        durationMinutes: boolean;
         reminder: boolean;
+        kind: boolean;
         completed: boolean;
         filePath: boolean;
     };
@@ -26,16 +28,10 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
     // If no metadata exists, task has changed
     if (!metadata) return { changed: true };
 
-    // Check for "just synced" flag - prevent rapid consecutive syncs
-    // This prevents the double-sync issue where a task is requeued immediately after being processed
-    if (metadata.justSynced === true && metadata.syncTimestamp) {
-        // Only skip if the sync was very recent (within 1.5 seconds)
-        const syncAge = Date.now() - metadata.syncTimestamp;
-        if (syncAge < 1500) {
-            LogUtils.debug(`Task ${taskId} was just synced ${syncAge}ms ago, skipping redundant sync`);
-            return { changed: false };
-        }
-    }
+    // Do not use the ephemeral justSynced flag to short-circuit change
+    // detection. A real user edit can happen immediately after a successful
+    // sync and must still be detected. Callers may use justSynced only after
+    // confirming that the current task still matches this metadata.
 
     // Always consider completed tasks as changed to ensure they get synced
     if (task.completed) {
@@ -46,7 +42,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
                 date: false,
                 time: false,
                 endTime: false,
+                durationMinutes: false,
                 reminder: false,
+                kind: false,
                 completed: true,
                 filePath: false
             }
@@ -63,7 +61,9 @@ export function hasTaskChanged(task: Task, metadata?: TaskMetadata, taskId?: str
         date: task.date !== metadata.date,
         time: task.time !== metadata.time,
         endTime: task.endTime !== metadata.endTime,
+        durationMinutes: task.durationMinutes !== metadata.durationMinutes,
         reminder: task.reminder !== metadata.reminder && (task.reminder !== undefined || metadata.reminder !== undefined),
+        kind: (task.kind || 'task') !== (metadata.kind || 'task'),
         completed: task.completed !== metadata.completed,
         filePath: !!task.filePath && metadata.filePath !== task.filePath // Track file moves
     };

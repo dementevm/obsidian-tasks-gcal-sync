@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from 'obsidian';
+import { App, PluginSettingTab, SecretComponent, Setting } from 'obsidian';
 import type GoogleCalendarSync from './main';
 import { GoogleCalendarSettings } from './types';
 import { useStore } from './store';
@@ -6,17 +6,28 @@ import { Notice } from 'obsidian';
 
 export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     clientId: '',
-    clientSecret: '',
+    clientSecretName: '',
+    oauthRedirectUri: 'https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/',
     oauth2Tokens: undefined,
-    syncEnabled: true,
+    syncEnabled: false,
+    calendarId: '',
+    primaryCalendarConfirmed: false,
+    scanEntireVault: false,
     defaultReminder: 30,
-    includeFolders: [],  // Empty by default to scan all folders
+    defaultTimedTaskReminderMinutes: 30,
+    defaultInformationalEventReminderMinutes: 0,
+    allDayTaskRemindersEnabled: false,
+    defaultAllDayTaskReminderMinutes: 0,
+    defaultEventDurationMinutes: 5,
+    defaultMorningEventTime: '09:00',
+    includeFolders: [],
     taskMetadata: {},
     taskIds: {},
     verboseLogging: false,
     hasCompletedOnboarding: true,  // Set to true to prevent welcome modal on startup
     mobileSyncLimit: 100,  // Default to 100 files on mobile
     mobileOptimizations: true,  // Enable mobile optimizations by default
+    settingsSchemaVersion: 3,
 };
 
 export class GoogleCalendarSettingsTab extends PluginSettingTab {
@@ -50,32 +61,207 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Folders to Sync')
-            .setDesc('Specify folders to scan for tasks. One folder per line. Leave empty to scan all folders.')
-            .addTextArea(text => text
-                .setPlaceholder('folder1\nfolder2/subfolder')
-                .setValue(this.plugin.settings.includeFolders.join('\n'))
+            .setName('Scan Entire Vault')
+            .setDesc('Explicitly allow this plugin to scan every Markdown file in the vault. When disabled, only the folders below are scanned.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.scanEntireVault)
                 .onChange(async (value) => {
-                    this.plugin.settings.includeFolders = value
-                        .split('\n')
-                        .map(folder => folder.trim())
-                        .filter(folder => folder.length > 0);
+                    this.plugin.settings.scanEntireVault = value;
+                    const state = useStore.getState();
+                    state.clearSyncQueue();
+                    state.clearTaskCache();
+                    state.clearFileCache();
                     await this.plugin.saveSettings();
+                    this.display();
                 }));
+
+        if (!this.plugin.settings.scanEntireVault) {
+            new Setting(containerEl)
+                .setName('Folders to Sync')
+                .setDesc('Only these folders/files are scanned. If nothing matches, sync stops safely instead of falling back to the whole vault.')
+                .addTextArea(text => text
+                    .setPlaceholder('folder1\nfolder2/subfolder')
+                    .setValue(this.plugin.settings.includeFolders.join('\n'))
+                    .onChange(async (value) => {
+                        this.plugin.settings.includeFolders = value
+                            .split('\n')
+                            .map(folder => folder.trim())
+                            .filter(folder => folder.length > 0);
+                        const state = useStore.getState();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
+                        await this.plugin.saveSettings();
+                    }));
+        }
 
         // Calendar Settings Section
         containerEl.createEl('h3', { text: 'Calendar Settings' });
 
+        const originalCalendarId = this.plugin.settings.calendarId || '';
+
         new Setting(containerEl)
-            .setName('Default Reminder')
-            .setDesc('Default reminder time in minutes before the task (if no specific reminder is set)')
+            .setName('Calendar ID')
+            .setDesc('Paste the full ID of a dedicated Google calendar. Using "primary" is allowed only after explicit confirmation.')
+            .addText(text => text
+                .setPlaceholder('...@group.calendar.google.com')
+                .setValue(this.plugin.settings.calendarId || '')
+                .onChange(async (value) => {
+                    const nextId = value.trim();
+                    if (nextId === 'primary' && !this.plugin.settings.primaryCalendarConfirmed) {
+                        const confirmed = window.confirm(
+                            'Use your PRIMARY Google Calendar?\n\n' +
+                            'Obsidian-managed events can be created, updated, and explicitly deleted there. ' +
+                            'A dedicated calendar is safer. Continue?'
+                        );
+                        if (!confirmed) {
+                            this.plugin.settings.calendarId = originalCalendarId;
+                            this.plugin.settings.primaryCalendarConfirmed = false;
+                            await this.plugin.saveSettings();
+                            this.display();
+                            return;
+                        }
+                        this.plugin.settings.primaryCalendarConfirmed = true;
+                    }
+
+                    // Primary consent is device-local and persists once explicitly
+                    // granted. Existing tasks may remain bound to primary even after
+                    // the default Calendar ID is switched back to a dedicated calendar.
+                    const previousCalendarId = this.plugin.settings.calendarId.trim();
+                    const calendarChanged = nextId !== previousCalendarId;
+
+                    if (calendarChanged && previousCalendarId) {
+                        // Legacy metadata created before calendar ownership was
+                        // tracked belongs to the calendar that was active before
+                        // this setting changed. Stamp it before switching targets
+                        // so existing tasks never "migrate" implicitly.
+                        for (const metadata of Object.values(this.plugin.settings.taskMetadata)) {
+                            if (metadata.eventId && !metadata.calendarId) {
+                                metadata.calendarId = previousCalendarId;
+                            }
+                        }
+                    }
+
+                    this.plugin.settings.calendarId = nextId;
+
+                    if (calendarChanged) {
+                        // Pending work belongs to the previous calendar target.
+                        // Do not let it execute after the target has changed.
+                        const state = useStore.getState();
+                        state.clearSyncTimeout();
+                        state.clearSyncQueueCheckers();
+                        state.clearSyncQueue();
+                        state.clearTaskCache();
+                        state.clearFileCache();
+                        useStore.setState({
+                            failedSyncs: new Map(),
+                            error: null,
+                            status: state.authenticated ? 'connected' : 'disconnected'
+                        });
+                    }
+
+                    await this.plugin.saveSettings();
+                }));
+
+        if (this.plugin.settings.calendarId === 'primary' &&
+            !this.plugin.settings.primaryCalendarConfirmed) {
+            new Setting(containerEl)
+                .setName('Primary Calendar Confirmation Required')
+                .setDesc('Setup links never transfer this consent. Confirm locally before sync can use the primary calendar.')
+                .addButton(button => button
+                    .setButtonText('Confirm Primary Calendar')
+                    .setWarning()
+                    .onClick(async () => {
+                        const confirmed = window.confirm(
+                            'Confirm use of your PRIMARY Google Calendar?\n\n' +
+                            'Obsidian-managed events may be created, updated, and explicitly deleted there.'
+                        );
+                        if (!confirmed) return;
+                        this.plugin.settings.primaryCalendarConfirmed = true;
+                        await this.plugin.saveSettings();
+                        this.display();
+                    }));
+        }
+
+        new Setting(containerEl)
+            .setName('Timed Task Reminder')
+            .setDesc('Default popup in minutes before a checkbox task with an explicit ⏰ time.')
             .addText(text => text
                 .setPlaceholder('30')
-                .setValue(this.plugin.settings.defaultReminder.toString())
+                .setValue(this.plugin.settings.defaultTimedTaskReminderMinutes.toString())
                 .onChange(async (value) => {
                     const reminder = parseInt(value);
                     if (!isNaN(reminder) && reminder >= 0) {
-                        this.plugin.settings.defaultReminder = reminder;
+                        this.plugin.settings.defaultTimedTaskReminderMinutes = reminder;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('Informational Event Reminder')
+            .setDesc('Default popup in minutes before a 📆 event when 🔔 is omitted. 0 means at event start.')
+            .addText(text => text
+                .setPlaceholder('0')
+                .setValue(this.plugin.settings.defaultInformationalEventReminderMinutes.toString())
+                .onChange(async (value) => {
+                    const reminder = parseInt(value);
+                    if (!isNaN(reminder) && reminder >= 0) {
+                        this.plugin.settings.defaultInformationalEventReminderMinutes = reminder;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('All-day Task Reminders')
+            .setDesc('All-day checkbox tasks have no popup by default. Enable only if you intentionally want Google all-day reminder behavior (relative to midnight).')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.allDayTaskRemindersEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.allDayTaskRemindersEnabled = value;
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+
+        if (this.plugin.settings.allDayTaskRemindersEnabled) {
+            new Setting(containerEl)
+                .setName('All-day Reminder Offset')
+                .setDesc('Minutes before midnight at the start of the all-day event. 0 means midnight. For a morning reminder, add an explicit ⏰ time instead.')
+                .addText(text => text
+                    .setPlaceholder('0')
+                    .setValue(this.plugin.settings.defaultAllDayTaskReminderMinutes.toString())
+                    .onChange(async (value) => {
+                        const reminder = parseInt(value);
+                        if (!isNaN(reminder) && reminder >= 0) {
+                            this.plugin.settings.defaultAllDayTaskReminderMinutes = reminder;
+                            await this.plugin.saveSettings();
+                        }
+                    }));
+        }
+
+        new Setting(containerEl)
+            .setName('Default Event Duration')
+            .setDesc('Duration in minutes for timed tasks that do not specify an end time.')
+            .addText(text => text
+                .setPlaceholder('5')
+                .setValue((this.plugin.settings.defaultEventDurationMinutes ?? 5).toString())
+                .onChange(async (value) => {
+                    const duration = parseInt(value);
+                    if (!isNaN(duration) && duration > 0 && duration <= 1440) {
+                        this.plugin.settings.defaultEventDurationMinutes = duration;
+                        await this.plugin.saveSettings();
+                    }
+                }));
+
+        new Setting(containerEl)
+            .setName('Morning Event Time')
+            .setDesc('Default time for 📆 informational events that have a date but no explicit ⏰ time.')
+            .addText(text => text
+                .setPlaceholder('09:00')
+                .setValue(this.plugin.settings.defaultMorningEventTime || '09:00')
+                .onChange(async (value) => {
+                    const normalized = value.trim();
+                    if (/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalized)) {
+                        this.plugin.settings.defaultMorningEventTime = normalized;
                         await this.plugin.saveSettings();
                     }
                 }));
@@ -117,33 +303,32 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                     }
                 }));
 
-        // Custom OAuth Credentials Section
-        containerEl.createEl('h3', { text: 'Custom OAuth Credentials (Advanced)' });
+        containerEl.createEl('h3', { text: 'Device Setup Transfer' });
+
+        new Setting(containerEl)
+            .setName('Copy Setup Link')
+            .setDesc('Copies an obsidian:// link with non-secret sync configuration. Client secret, refresh token, task metadata, and auto-sync state are never included.')
+            .addButton(button => button
+                .setButtonText('Copy Setup Link')
+                .onClick(async () => {
+                    await this.plugin.copySetupLink();
+                }));
+
+        // OAuth Settings Section
+        containerEl.createEl('h3', { text: 'Google OAuth (Privacy-first)' });
 
         const oauthDesc = containerEl.createEl('div', { cls: 'setting-item-description' });
         oauthDesc.style.marginBottom = '1em';
-
-        oauthDesc.createEl('p', { text: 'If you\'re seeing "This app is blocked" errors, you can use your own Google Cloud OAuth credentials:' });
-        const ol = oauthDesc.createEl('ol');
-        const step1 = ol.createEl('li');
-        step1.appendText('Go to ');
-        step1.createEl('a', { text: 'Google Cloud Console', href: 'https://console.cloud.google.com/' });
-        ol.createEl('li', { text: 'Create a new project (or select existing)' });
-        ol.createEl('li', { text: 'Enable the Google Calendar API' });
-        ol.createEl('li', { text: 'Go to "Credentials" \u2192 "Create Credentials" \u2192 "OAuth client ID"' });
-        ol.createEl('li', { text: 'Choose "Desktop app" as the application type' });
-        ol.createEl('li', { text: 'Copy the Client ID and Client Secret below' });
-        const step7 = ol.createEl('li');
-        step7.appendText('Add ');
-        step7.createEl('code', { text: 'http://127.0.0.1:8085/callback' });
-        step7.appendText(' to Authorized redirect URIs');
-        const noteP = oauthDesc.createEl('p');
-        noteP.createEl('strong', { text: 'Note:' });
-        noteP.appendText(' After changing credentials, disconnect and reconnect your Google account.');
+        oauthDesc.createEl('p', {
+            text: 'Use your own Google Cloud Web application OAuth client. Authentication goes directly between Obsidian and Google; the redirect bridge only returns the one-time authorization code to Obsidian.'
+        });
+        oauthDesc.createEl('p', {
+            text: 'The client secret and refresh token are stored in Obsidian SecretStorage and are not written to this plugin\'s data.json.'
+        });
 
         new Setting(containerEl)
-            .setName('Custom Client ID')
-            .setDesc('Your Google OAuth Client ID (leave empty to use default)')
+            .setName('OAuth Client ID')
+            .setDesc('Client ID from your Google Cloud Web application OAuth client.')
             .addText(text => text
                 .setPlaceholder('xxxxxx.apps.googleusercontent.com')
                 .setValue(this.plugin.settings.clientId || '')
@@ -153,16 +338,23 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Custom Client Secret')
-            .setDesc('Your Google OAuth Client Secret (leave empty to use default)')
-            .addText(text => {
-                text.setPlaceholder('GOCSPX-xxxxxx')
-                    .setValue(this.plugin.settings.clientSecret || '')
-                    .onChange(async (value) => {
-                        this.plugin.settings.clientSecret = value.trim();
-                        await this.plugin.saveSettings();
-                    });
-                text.inputEl.type = 'password';
-            });
+            .setName('OAuth Client Secret')
+            .setDesc('Select or create a SecretStorage entry. Secret ID is only a local name (for example: tasks-gcal-sync-client-secret); put the Google OAuth Client Secret itself in the secret value.')
+            .addComponent(el => new SecretComponent(this.app, el)
+                .setValue(this.plugin.settings.clientSecretName || '')
+                .onChange(async (value) => {
+                    this.plugin.settings.clientSecretName = value ?? '';
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
+            .setName('OAuth Redirect Bridge')
+            .setDesc('https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/ — fixed by the public plugin for security. Register this exact URL as an Authorized redirect URI in Google Cloud.');
+
+        const authNote = containerEl.createEl('div', { cls: 'setting-item-description' });
+        authNote.style.marginTop = '0.75em';
+        authNote.createEl('p', {
+            text: 'Because SecretStorage is device-local, add/select the client-secret entry once on each device. Each device keeps its own Google refresh token.'
+        });
     }
 }

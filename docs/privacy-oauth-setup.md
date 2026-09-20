@@ -1,0 +1,132 @@
+# Privacy-first Google Calendar setup
+
+This fork uses a user-owned Google OAuth client and never sends OAuth tokens
+through the upstream Sasoon/Netlify backend.
+
+## Architecture
+
+```text
+Obsidian (desktop/iOS)
+    |
+    | OAuth authorization request
+    v
+Google
+    |
+    | one-time code + state
+    v
+Static HTTPS redirect bridge
+    |
+    | obsidian://auth/gcalsync
+    v
+Obsidian
+    |
+    | code + PKCE verifier + client secret
+    v
+Google token endpoint
+```
+
+The bridge receives only Google's short-lived authorization response and sends
+it back to Obsidian. It contains no Google client secret, refresh token, vault
+content, or calendar data.
+
+## Requirements
+
+- Obsidian 1.11.4 or newer.
+- Google Calendar API enabled in a Google Cloud project.
+- A Google OAuth client of type **Web application**.
+- OAuth bridge: `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`.
+- A dedicated Google calendar is recommended, for example `Obsidian Tasks`.
+
+## Google Cloud
+
+1. Create or select a Google Cloud project.
+2. Enable **Google Calendar API**.
+3. Open **Google Auth Platform** and configure:
+   - **Branding**: app name, support email and developer contact email.
+   - **Audience**: **External** for a normal personal Google account.
+   - **Data Access**: add only
+     `https://www.googleapis.com/auth/calendar.events.owned`.
+4. During the first smoke test you may keep the app in **Testing** and add your
+   Google account as a test user.
+5. After the smoke test, switch the app to **In production**. In Testing,
+   authorizations that request Calendar access expire after 7 days, including
+   offline refresh tokens. For a personal-use app with fewer than 100 users,
+   Google does not require OAuth verification, although an unverified-app
+   warning can still be shown.
+6. Under **Clients**, create an OAuth client:
+   - Application type: **Web application**
+   - Authorized redirect URI:
+     `https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/`
+   - The scheme, path and trailing slash must match exactly.
+7. Copy the Client ID and Client Secret.
+
+The plugin currently requests only:
+
+```text
+https://www.googleapis.com/auth/calendar.events.owned
+```
+
+## Redirect bridge
+
+The canonical bridge for the public plugin is:
+
+```text
+https://dementevm.github.io/obsidian-tasks-gcal-sync-bridge/
+```
+
+Its source is intentionally public in `dementevm/obsidian-tasks-gcal-sync-bridge`.
+It performs no server-side processing, has no application-level persistence and contains no client
+secret or refresh token. GitHub Pages may process ordinary HTTP request metadata under GitHub's own policies.
+
+Use this URL exactly in Google Cloud, including the trailing slash.
+
+## Obsidian configuration
+
+Open **Settings → Tasks Google Calendar Sync**.
+
+For the first smoke test, leave **Auto-sync disabled** and restrict
+**Folders to Sync** to a dedicated empty test folder so connecting to Google
+cannot publish existing vault tasks.
+
+1. Set **Calendar ID**.
+   - Prefer the ID of a dedicated `Obsidian Tasks` calendar.
+   - `primary` remains available for compatibility.
+2. Set **OAuth Client ID**.
+3. Under **OAuth Client Secret**, create/select an Obsidian SecretStorage entry
+   containing the Google OAuth client secret.
+4. Register the fixed bridge URL shown by the plugin exactly in the Google OAuth client.
+5. Connect to Google.
+
+## Device-local secrets
+
+The following values are not written to the plugin's `data.json`:
+
+- OAuth Client Secret — Obsidian SecretStorage
+- Google refresh token — Obsidian SecretStorage
+- PKCE verifier/state — vault-local application storage
+
+This is intentional. LiveSync can sync the plugin's normal configuration and task metadata, but OAuth secrets are provisioned independently on each device. The plugin never expects a refresh token from another device.
+
+For a new iPhone or desktop:
+
+1. Sync/install the plugin.
+2. Create/select the Client Secret SecretStorage entry on that device.
+3. Start Google authorization from the plugin ribbon icon or the `GCal: Disconnected` status item.
+
+Each device maintains its own local OAuth session and refresh token. **Disconnect Google Calendar on this device** clears only the current device's credentials; it does not revoke the Google OAuth grant for other connected devices. If Calendar API returns HTTP 401, the plugin tries one local access-token refresh before requiring a reconnect.
+
+## Task syntax
+
+Existing Sasoon task syntax is preserved:
+
+```markdown
+- [ ] Call service 📅 2026-09-21 ⏰ 14:30 🔔30m
+```
+
+The Obsidian Tasks due date remains compatible while the plugin uses the time
+and reminder metadata for Google Calendar.
+
+
+## Multi-device release checks
+
+Before a release that changes OAuth, SecretStorage, setup transfer, or LiveSync behavior, run the multi-device section in [smoke-test.md](smoke-test.md). The release candidate must verify desktop + iOS independent authorization, device-local disconnect, 401 recovery, and LiveSync task updates without cross-device sign-out.

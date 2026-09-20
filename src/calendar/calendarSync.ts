@@ -14,12 +14,14 @@ import { Platform } from 'obsidian';
 
 interface GoogleCalendarEventInput {
     summary: string;
-    start: { date?: string; dateTime?: string };
-    end: { date?: string; dateTime?: string };
+    description?: string;
+    start: { date?: string; dateTime?: string; timeZone?: string };
+    end: { date?: string; dateTime?: string; timeZone?: string };
     extendedProperties: {
         private: {
             obsidianTaskId: string;
             isObsidianTask: 'true';
+            obsidianItemKind?: 'task' | 'event';
             version?: string;
         };
     };
@@ -51,6 +53,8 @@ export class CalendarSync {
     private readonly plugin: GoogleCalendarSyncPlugin;
     private processingQueue = new Set<string>();
     private processingPromises = new Map<string, Promise<any>>();
+    /** Internal per-key serialization for Google Calendar operations. */
+    private lockChains = new Map<string, Promise<void>>();
 
     // Cache to store events during a sync session
     private eventsCache: {
@@ -67,6 +71,24 @@ export class CalendarSync {
         this.plugin = plugin;
     }
 
+    private validateCalendarTarget(calendarIdOverride?: string): string {
+        const calendarId = (calendarIdOverride ?? this.plugin.settings.calendarId)?.trim();
+        if (!calendarId) {
+            throw new Error('Calendar ID is not configured.');
+        }
+        if (calendarId === 'primary' && !this.plugin.settings.primaryCalendarConfirmed) {
+            throw new Error('Primary calendar use has not been explicitly confirmed.');
+        }
+        return calendarId;
+    }
+
+    private getCalendarEventsEndpoint(eventId?: string, calendarIdOverride?: string): string {
+        const calendarId = encodeURIComponent(this.validateCalendarTarget(calendarIdOverride));
+        return eventId
+            ? `/calendars/${calendarId}/events/${encodeURIComponent(eventId)}`
+            : `/calendars/${calendarId}/events`;
+    }
+
     /**
      * Clears the events cache to force fresh data on next request
      */
@@ -81,7 +103,7 @@ export class CalendarSync {
     public async initialize(): Promise<void> {
         try {
             // Verify calendar access by making a test request
-            await this.makeRequest('/calendars/primary/events', 'GET', { maxResults: 1 });
+            await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET', { maxResults: 1 });
 
             // Initialize repair manager if needed
             if (!this.plugin.repairManager) {
@@ -98,100 +120,46 @@ export class CalendarSync {
         }
     }
 
-    private async withLock<T>(lockKey: string, operation: () => Promise<T>, maxWaitTime: number = TIMING.LOCK_TIMEOUT_MS): Promise<T> {
-        const startTime = Date.now();
+    private async withLock<T>(
+        lockKey: string,
+        operation: () => Promise<T>,
+        maxWaitTime: number = TIMING.LOCK_TIMEOUT_MS
+    ): Promise<T> {
+        const normalizedKey = lockKey.toLowerCase().trim().replace(/\\s+/g, '');
+        const previous = this.lockChains.get(normalizedKey) ?? Promise.resolve();
 
-        // Normalize lock key: lowercase, trim whitespace, consistent colon separator
-        const normalizedKey = lockKey.toLowerCase().trim().replace(/\s+/g, '');
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const tail = previous.catch(() => undefined).then(() => gate);
+        this.lockChains.set(normalizedKey, tail);
 
-        // Generate a unique operation ID for this specific lock attempt
-        const operationId = `${normalizedKey.substring(0, 20)}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        LogUtils.debug(`Lock operation started: ${operationId} for key "${normalizedKey}"`);
+        const waitWarning = setTimeout(() => {
+            LogUtils.warn(
+                'Still waiting for calendar lock "' + normalizedKey + '" after ' + maxWaitTime + 'ms. ' +
+                'The active operation is not force-released because the underlying network request cannot be safely cancelled.'
+            );
+        }, maxWaitTime);
 
-        // If we already have the lock (i.e. we're the processing task), proceed
-        if (useStore.getState().processingTasks.has(normalizedKey)) {
-            LogUtils.debug(`Already have lock for "${normalizedKey}", proceeding with operation ${operationId}`);
-            return operation();
-        }
-
-        // Try to acquire lock with exponential backoff
-        // Re-read state on each iteration to see lock releases by other code paths
-        while (useStore.getState().isTaskLocked(normalizedKey)) {
-            if (Date.now() - startTime > maxWaitTime) {
-                LogUtils.warn(`Lock acquisition timeout for key "${normalizedKey}" (operation: ${operationId}) after ${maxWaitTime}ms`);
-
-                // Check if the lock appears to be stale
-                const lockTime = useStore.getState().getLockTimestamp(normalizedKey);
-                if (lockTime && Date.now() - lockTime > TIMING.LOCK_TIMEOUT_MS) {
-                    // Force-release the stale lock, but DON'T proceed with this operation
-                    // The original operation might still be running (just slow/stuck)
-                    LogUtils.warn(`Force-releasing stale lock for key "${normalizedKey}" (locked for ${Date.now() - lockTime}ms)`);
-                    useStore.getState().removeProcessingTask(normalizedKey);
-                    // Abort this operation to prevent duplicate execution
-                    throw new Error(`Stale lock released for "${normalizedKey}". Operation ${operationId} aborted - retry will be scheduled.`);
-                }
-
-                throw new Error(`Lock timeout: Failed to acquire lock for key "${normalizedKey}" after ${maxWaitTime}ms (operation: ${operationId})`);
-            }
-
-            // Exponential backoff with jitter to prevent thundering herd
-            const attempts = useStore.getState().getLockAttempts(normalizedKey);
-            const baseWait = Math.min(Math.pow(2, attempts) * 100, 1000);
-            const jitter = Math.floor(Math.random() * 100); // Add random jitter
-            const waitTime = baseWait + jitter;
-
-            LogUtils.debug(`Waiting ${waitTime}ms for lock on "${normalizedKey}" (attempt ${attempts + 1})`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            useStore.getState().incrementLockAttempts(normalizedKey);
-        }
-
-        // Track timeout handle for cleanup
-        let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+        await previous.catch(() => undefined);
+        clearTimeout(waitWarning);
 
         try {
-            LogUtils.debug(`Acquired lock for "${normalizedKey}" (${operationId})`);
-            useStore.getState().addProcessingTask(normalizedKey);
-
-            // Add operation timeout as an additional safety measure
-            const timeoutPromise = new Promise<never>((_, reject) => {
-                timeoutHandle = setTimeout(() => {
-                    reject(new Error(`Operation timeout: Lock "${normalizedKey}" held too long (operation: ${operationId}, max: ${maxWaitTime}ms)`));
-                }, maxWaitTime);
-            });
-
-            // Race between operation and timeout
-            const result = await Promise.race([
-                operation(),
-                timeoutPromise
-            ]);
-
-            // Clear the timeout on successful completion to prevent memory leaks
-            if (timeoutHandle) {
-                clearTimeout(timeoutHandle);
-                timeoutHandle = null;
-            }
-
-            return result;
-        } catch (error) {
-            // Clear the timeout on error to prevent memory leaks
-            if (timeoutHandle) {
-                clearTimeout(timeoutHandle);
-                timeoutHandle = null;
-            }
-            LogUtils.error(`Error during locked operation ${operationId} for key "${normalizedKey}":`, error);
-            throw error;
+            return await operation();
         } finally {
-            LogUtils.debug(`Releasing lock for "${normalizedKey}" (${operationId})`);
-            useStore.getState().removeProcessingTask(normalizedKey);
-            useStore.getState().resetLockAttempts(normalizedKey);
+            release();
+            if (this.lockChains.get(normalizedKey) === tail) {
+                this.lockChains.delete(normalizedKey);
+            }
         }
     }
 
-    public async deleteEvent(eventId: string, taskId?: string): Promise<void> {
+    public async deleteEvent(eventId: string, taskId?: string, calendarId?: string): Promise<void> {
+        const targetCalendarId = this.validateCalendarTarget(calendarId);
         const operation = async () => {
             try {
-                await this.checkRateLimit();
-                await this.makeRequest(`/calendars/primary/events/${eventId}`, 'DELETE');
+                await this.makeRequest(this.getCalendarEventsEndpoint(eventId, targetCalendarId), 'DELETE');
                 LogUtils.debug(`Successfully deleted event: ${eventId}`);
             } catch (error) {
                 // If the event is already gone (410) or not found (404), consider it a success
@@ -212,16 +180,18 @@ export class CalendarSync {
 
         if (taskId) {
             // Use a single composite lock key instead of nested locks to prevent deadlocks
-            return this.withLock(`task:${taskId}:event:${eventId}`, operation);
+            return this.withLock(`calendar:${targetCalendarId}:task:${taskId}:event:${eventId}`, operation);
         } else {
             // If no taskId, just lock the event
-            return this.withLock(`event:${eventId}`, operation);
+            return this.withLock(`calendar:${targetCalendarId}:event:${eventId}`, operation);
         }
     }
 
     public async updateEvent(task: Task, eventId: string): Promise<void> {
+        const metadata = this.plugin.settings.taskMetadata[task.id];
+        const targetCalendarId = this.validateCalendarTarget(metadata?.calendarId);
         // Use a single composite lock key instead of nested locks to prevent deadlocks
-        return this.withLock(`task:${task.id}:event:${eventId}`, async () => {
+        return this.withLock(`calendar:${targetCalendarId}:task:${task.id}:event:${eventId}`, async () => {
             try {
                 if (!task.id) {
                     throw new Error('Cannot update event for task without ID');
@@ -230,22 +200,26 @@ export class CalendarSync {
                 // Check if the event still exists and is valid
                 const metadata = this.plugin.settings.taskMetadata[task.id];
                 if (!metadata || metadata.eventId !== eventId) {
-                    LogUtils.debug(`Event ${eventId} no longer associated with task ${task.id}, skipping update`);
+                    LogUtils.debug(`Event ${eventId} is no longer associated with task ${task.id}, skipping direct update`);
                     return;
                 }
 
                 const event = this.createEventFromTask(task);
-                await this.makeRequest(`/calendars/primary/events/${eventId}`, 'PUT', event);
+                await this.makeRequest(this.getCalendarEventsEndpoint(eventId, targetCalendarId), 'PUT', event);
                 LogUtils.debug(`Updated event ${eventId} for task ${task.id}`);
 
                 const updatedMetadata = {
                     ...metadata,
                     eventId,
+                    calendarId: targetCalendarId,
                     title: task.title,
                     date: task.date,
                     time: task.time,
                     endTime: task.endTime,
+                    durationMinutes: task.durationMinutes,
                     reminder: task.reminder,
+                    kind: task.kind || 'task',
+                    timeZone: task.timeZone || metadata.timeZone || TimeUtils.getLocalTimeZone(),
                     completed: task.completed,
                     lastModified: Date.now(),
                     lastSynced: Date.now()
@@ -261,15 +235,7 @@ export class CalendarSync {
     }
 
     private async withQueuedProcessing<T>(taskId: string, operation: () => Promise<T>): Promise<T | undefined> {
-        // First, check if task was recently synced, don't even try to process it
         const metadata = this.plugin.settings.taskMetadata[taskId];
-        if (metadata?.justSynced && metadata.syncTimestamp) {
-            const syncAge = Date.now() - metadata.syncTimestamp;
-            if (syncAge < 1500) {
-                LogUtils.debug(`Task ${taskId} was just synced ${syncAge}ms ago, skipping`);
-                return undefined;
-            }
-        }
 
         // ATOMIC CHECK-AND-ADD: Do this synchronously (no await) to prevent race conditions
         // JavaScript is single-threaded for synchronous operations
@@ -290,7 +256,11 @@ export class CalendarSync {
                     if (currentPromise) {
                         await currentPromise;
                     }
-                    return this.withLock(`task:${taskId}`, operation);
+                    // Re-enter through the queue instead of taking the same
+                    // calendar lock around the whole sync operation. This keeps
+                    // multiple follow-up edits serialized and avoids self-deadlock
+                    // when createEvent() later takes task:<id>.
+                    return this.withQueuedProcessing(taskId, operation);
                 }
             } catch (error) {
                 LogUtils.error(`Error checking task state for ${taskId}:`, error);
@@ -312,10 +282,10 @@ export class CalendarSync {
         return promise;
     }
 
-    private async cleanupExistingEvents(taskId: string): Promise<string | undefined> {
+    private async cleanupExistingEvents(taskId: string, calendarId: string): Promise<string | undefined> {
         try {
             // Use cached events for better performance
-            const events = await this.findAllObsidianEvents();
+            const events = await this.findAllObsidianEvents({ calendarId });
             const taskEvents = events.filter(event =>
                 event.extendedProperties?.private?.obsidianTaskId === taskId
             );
@@ -324,7 +294,7 @@ export class CalendarSync {
 
             // Check metadata first
             const metadata = this.plugin.settings.taskMetadata[taskId];
-            if (metadata?.eventId) {
+            if (metadata?.eventId && metadata.calendarId === calendarId) {
                 // If we have metadata, find that specific event
                 const metadataEvent = taskEvents.find(e => e.id === metadata.eventId);
                 if (metadataEvent) {
@@ -332,7 +302,7 @@ export class CalendarSync {
                     const duplicates = taskEvents.filter(e => e.id !== metadata.eventId);
                     if (duplicates.length > 0) {
                         LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${taskId}`);
-                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId)));
+                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId, calendarId)));
                     }
                     return metadata.eventId;
                 }
@@ -347,7 +317,7 @@ export class CalendarSync {
                 // Delete duplicates if any
                 if (duplicates.length > 0) {
                     LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${taskId}`);
-                    await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId)));
+                    await Promise.all(duplicates.map(event => this.deleteEvent(event.id, taskId, calendarId)));
                 }
 
                 return keepEvent.id;
@@ -366,34 +336,38 @@ export class CalendarSync {
             return;
         }
 
+        // Final safety boundary before any Google Calendar mutation. Queue state
+        // and metadata can outlive a scope change, so never trust callers alone.
+        const metadata = this.plugin.settings.taskMetadata[task.id];
+        const sourcePath = task.filePath || metadata?.filePath;
+        if (!sourcePath || !this.plugin.taskParser.isPathInScope(sourcePath)) {
+            LogUtils.warn(`Skipping calendar sync outside configured scope: ${sourcePath || task.id}`);
+            return;
+        }
+
         return this.withQueuedProcessing(task.id, async () => {
             try {
                 // Trust the task data from the caller — it was already freshly parsed
                 // by processSyncQueue or the editor change handler. Re-fetching here
                 // added ~100ms latency per task with no benefit.
 
-                // Get metadata and check for existing events
+                // Existing tasks stay bound to the calendar where their event
+                // was first created. The global Calendar ID is only the target for
+                // tasks that do not yet have a calendar binding.
                 const metadata = this.plugin.settings.taskMetadata[task.id];
+                const targetCalendarId = this.validateCalendarTarget(
+                    metadata?.calendarId || this.plugin.settings.calendarId
+                );
 
                 // Only log task data once per sync operation
-                LogUtils.debug(`Processing task ${task.id}: ${JSON.stringify({
-                    title: task.title,
-                    date: task.date,
-                    time: task.time,
-                    reminder: task.reminder,
-                    completed: task.completed,
-                    filePath: task.filePath
-                })}`);
+                LogUtils.debug(`Processing calendar item ${task.id} in calendar ${targetCalendarId}`);
 
                 // ── FAST PATH: use metadata eventId as source of truth ──
-                // The events cache can be stale (up to 10s), which causes duplicates
-                // when multiple syncs fire in quick succession. The metadata is always
-                // up-to-date because we write it synchronously after each API call.
                 if (metadata?.eventId && !task.completed) {
                     try {
                         const event = this.createEventFromTask(task);
-                        await this.makeRequest(`/calendars/primary/events/${metadata.eventId}`, 'PUT', event);
-                        this.updateTaskMetadata(task, metadata.eventId, metadata);
+                        await this.makeRequest(this.getCalendarEventsEndpoint(metadata.eventId, targetCalendarId), 'PUT', event);
+                        this.updateTaskMetadata(task, metadata.eventId, metadata, targetCalendarId);
                         await this.saveSettings();
                         LogUtils.debug(`Updated existing event ${metadata.eventId} for task ${task.id} (via metadata fast path)`);
                         return;
@@ -410,7 +384,7 @@ export class CalendarSync {
                 // ── SLOW PATH: query calendar API for task events ──
                 // Only used for: completed tasks, new tasks (no metadata), or when the
                 // metadata eventId was stale (event deleted externally)
-                const events = await this.findAllObsidianEvents({ forceFresh: true });
+                const events = await this.findAllObsidianEvents({ forceFresh: true, calendarId: targetCalendarId });
                 const taskEvents = events.filter(event =>
                     event.extendedProperties?.private?.obsidianTaskId === task.id
                 );
@@ -420,7 +394,9 @@ export class CalendarSync {
                     LogUtils.debug(`Task ${task.id} is marked as completed, forcing sync to delete events`);
                     try {
                         // Delete all events first
-                        const deleteResults = await Promise.allSettled(taskEvents.map(event => this.deleteEvent(event.id)));
+                        const deleteResults = await Promise.allSettled(
+                            taskEvents.map(event => this.deleteEvent(event.id, task.id, targetCalendarId))
+                        );
 
                         // Check for any failures
                         const failures = deleteResults.filter(result => result.status === 'rejected');
@@ -454,23 +430,25 @@ export class CalendarSync {
                     // Delete duplicates if any
                     if (duplicates.length > 0) {
                         LogUtils.debug(`Cleaning up ${duplicates.length} duplicate events for task ${task.id}`);
-                        await Promise.all(duplicates.map(event => this.deleteEvent(event.id)));
+                        await Promise.all(
+                            duplicates.map(event => this.deleteEvent(event.id, task.id, targetCalendarId))
+                        );
                         this.clearEventsCache(); // Invalidate after cleanup
                     }
 
                     // Update the kept event
                     const event = this.createEventFromTask(task);
-                    await this.makeRequest(`/calendars/primary/events/${keepEvent.id}`, 'PUT', event);
-                    this.updateTaskMetadata(task, keepEvent.id, metadata);
+                    await this.makeRequest(this.getCalendarEventsEndpoint(keepEvent.id, targetCalendarId), 'PUT', event);
+                    this.updateTaskMetadata(task, keepEvent.id, metadata, targetCalendarId);
                     await this.saveSettings();
                     LogUtils.debug(`Updated existing event ${keepEvent.id} for task ${task.id}`);
                     return;
                 }
 
                 // Create new event only if we don't have any existing ones
-                const newEventId = await this.createEvent(task);
+                const newEventId = await this.createEvent(task, targetCalendarId);
                 if (newEventId) {
-                    this.updateTaskMetadata(task, newEventId, metadata);
+                    this.updateTaskMetadata(task, newEventId, metadata, targetCalendarId);
                     await this.saveSettings();
                     this.clearEventsCache(); // Invalidate after creation so next sync sees it
                     LogUtils.debug(`Created new event ${newEventId} for task ${task.id}`);
@@ -488,7 +466,12 @@ export class CalendarSync {
         return result.changed;
     }
 
-    public updateTaskMetadata(task: Task, eventId: string | undefined, existingMetadata?: TaskMetadata): void {
+    public updateTaskMetadata(
+        task: Task,
+        eventId: string | undefined,
+        existingMetadata?: TaskMetadata,
+        calendarId?: string
+    ): void {
         if (!eventId) {
             LogUtils.warn('Cannot update metadata without event ID');
             return;
@@ -512,11 +495,15 @@ export class CalendarSync {
         const metadata = {
             filePath: task.filePath || existingMetadata?.filePath || '',
             eventId: eventId,
+            calendarId: this.validateCalendarTarget(calendarId || existingMetadata?.calendarId),
             title: task.title,
             date: task.date,
             time: task.time,
             endTime: task.endTime,
+            durationMinutes: task.durationMinutes,
             reminder: task.reminder,
+            kind: task.kind || 'task',
+            timeZone: task.timeZone || existingMetadata?.timeZone || TimeUtils.getLocalTimeZone(),
             completed: task.completed,
             createdAt: existingMetadata?.createdAt || currentTime,
             lastModified: currentTime,
@@ -606,19 +593,13 @@ export class CalendarSync {
     /**
      * Execute a request with timeout using Promise.race
      */
+    /**
+     * requestUrl does not expose an AbortSignal. A synthetic Promise.race
+     * timeout would reject while the HTTP request kept running, which is unsafe
+     * for event creation because a retry could create a duplicate.
+     */
     private async requestWithTimeout(options: Parameters<typeof requestUrl>[0]): Promise<any> {
-        const timeoutMs = TIMING.REQUEST_TIMEOUT_MS;
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Request timeout after ${timeoutMs}ms`));
-            }, timeoutMs);
-        });
-
-        return Promise.race([
-            requestUrl(options),
-            timeoutPromise
-        ]);
+        return requestUrl(options);
     }
 
     private async makeRequest(endpoint: string, method: string, params?: any): Promise<any> {
@@ -630,7 +611,7 @@ export class CalendarSync {
                 throw new Error('Auth manager not initialized');
             }
 
-            const accessToken = await this.plugin.authManager.getValidAccessToken();
+            let accessToken = await this.plugin.authManager.getValidAccessToken();
             const url = `${this.BASE_URL}${endpoint}`;
 
             const requestUrlString = method === 'GET' && params ?
@@ -638,20 +619,31 @@ export class CalendarSync {
                 url;
 
             LogUtils.debug(`Making API request: ${method} ${endpoint}`);
-            if (this.plugin.settings.verboseLogging) {
-                LogUtils.debug(`Request details: URL: ${requestUrlString}, Method: ${method}, Params: ${params ? JSON.stringify(params) : 'none'}`);
-            }
 
             try {
-                const response = await this.requestWithTimeout({
+                const performRequest = (token: string) => this.requestWithTimeout({
                     url: requestUrlString,
                     method,
                     headers: {
-                        'Authorization': `Bearer ${accessToken}`,
+                        'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json',
                     },
                     body: method !== 'GET' && params ? JSON.stringify(params) : undefined
                 });
+
+                let response = await performRequest(accessToken);
+
+                // A bearer token can be invalidated before its advertised
+                // expiry (for example after OAuth activity on another device).
+                // A 401 means Google rejected authorization before processing
+                // the Calendar operation, so refresh locally and retry exactly
+                // once. This is safe even for POST because the rejected request
+                // was not authorized to create anything.
+                if (response.status === 401) {
+                    LogUtils.warn('Calendar API returned 401; refreshing device-local access token once');
+                    accessToken = await this.plugin.authManager.refreshAfterUnauthorized();
+                    response = await performRequest(accessToken);
+                }
 
                 // Special handling for 410 Gone on DELETE requests
                 if (response.status === 410 && method === 'DELETE') {
@@ -660,8 +652,7 @@ export class CalendarSync {
                 }
 
                 if (response.status >= 400) {
-                    // Log error details with sanitized response
-                    LogUtils.error(`API request failed (${method} ${endpoint}): Status: ${response.status}, Response: ${LogUtils.sanitize(response.text)}`);
+                    LogUtils.error(`API request failed (${method} ${endpoint}): Status: ${response.status}`);
 
                     const apiError: ApiError = new Error(`Request failed, status ${response.status}`);
                     apiError.status = response.status;
@@ -692,7 +683,9 @@ export class CalendarSync {
                     if (apiError.status === 400) {
                         new Notice(`Calendar API error (400): Check your authenticated account has calendar access`);
                     } else if (apiError.status === 401) {
-                        new Notice(`Authentication error (401): Your session has expired. Please reconnect to Google Calendar.`);
+                        useStore.getState().setAuthenticated(false);
+                        useStore.getState().setStatus('disconnected');
+                        new Notice(`Authentication error (401): Google rejected refreshed credentials. Please reconnect this device.`);
                     } else if (apiError.status === 403) {
                         new Notice(`Permission error (403): You don't have permission to access this calendar.`);
                     }
@@ -705,21 +698,25 @@ export class CalendarSync {
             shouldRetry: (error) => {
                 // Retry on network errors, timeouts, and 5xx/429 responses
                 if (error instanceof Error) {
-                    // Always retry on timeout
-                    if (error.message.includes('timeout')) {
-                        return true;
-                    }
+                    // POST event creation is not idempotent. Never retry it after
+                    // an ambiguous network failure, timeout, rate-limit response,
+                    // or server error because Google may already have created it.
+                    if (method === 'POST') return false;
+
+                    if (error.message.includes('timeout')) return true;
                     const status = (error as any).status;
-                    // Retry on server errors and rate limiting, but not client errors
-                    return !status || status >= 500 || status === 429;
+                    if (status === 429) return true;
+
+                    // GET is read-only; PUT/DELETE target a concrete event ID.
+                    return !status || status >= 500;
                 }
                 return true;
             }
         });
     }
 
-    public getTimezoneOffset(): string {
-        return TimeUtils.getTimezoneOffset();
+    public getTimezoneOffset(date?: string, time?: string): string {
+        return TimeUtils.getTimezoneOffset(date, time);
     }
 
     public async findExistingEvent(task: Task): Promise<string | null> {
@@ -729,8 +726,13 @@ export class CalendarSync {
                 return null;
             }
 
-            // Use the cached events instead of making a new request
-            const events = await this.findAllObsidianEvents();
+            const metadata = this.plugin.settings.taskMetadata[task.id];
+            const targetCalendarId = this.validateCalendarTarget(
+                metadata?.calendarId || this.plugin.settings.calendarId
+            );
+
+            // Search in the calendar this task is bound to.
+            const events = await this.findAllObsidianEvents({ calendarId: targetCalendarId });
             const matchingEvents = events.filter(event =>
                 event.extendedProperties?.private?.obsidianTaskId === task.id
             );
@@ -756,11 +758,17 @@ export class CalendarSync {
      * @param forceFresh Force a fresh fetch from API instead of using cache
      * @returns Array of calendar events
      */
-    public async findAllObsidianEvents(options?: { timeMin?: string; timeMax?: string; forceFresh?: boolean }): Promise<GoogleCalendarEvent[]> {
-        const { timeMin, timeMax, forceFresh = false } = options ?? {};
+    public async findAllObsidianEvents(options?: {
+        timeMin?: string;
+        timeMax?: string;
+        forceFresh?: boolean;
+        calendarId?: string;
+    }): Promise<GoogleCalendarEvent[]> {
+        const { timeMin, timeMax, forceFresh = false, calendarId: requestedCalendarId } = options ?? {};
         try {
-            // Generate a cache key based on the time parameters
-            const cacheKey = `events-${timeMin || 'none'}-${timeMax || 'none'}`;
+            // Generate a cache key based on the time parameters and calendar.
+            const calendarId = this.validateCalendarTarget(requestedCalendarId);
+            const cacheKey = `events-${calendarId}-${timeMin || 'none'}-${timeMax || 'none'}`;
 
             // Check cache first, unless forced to get fresh data
             if (!forceFresh &&
@@ -785,8 +793,18 @@ export class CalendarSync {
             if (timeMin) params.timeMin = timeMin;
             if (timeMax) params.timeMax = timeMax;
 
-            const response = await this.makeRequest('/calendars/primary/events', 'GET', params);
-            const events = response.items || [];
+            const events: GoogleCalendarEvent[] = [];
+            let pageToken: string | undefined;
+
+            do {
+                const response = await this.makeRequest(
+                    this.getCalendarEventsEndpoint(undefined, calendarId),
+                    'GET',
+                    pageToken ? { ...params, pageToken } : params
+                );
+                events.push(...(response.items || []));
+                pageToken = response.nextPageToken;
+            } while (pageToken);
 
             // Update cache with detailed logging
             this.eventsCache = {
@@ -805,27 +823,28 @@ export class CalendarSync {
         }
     }
 
-    public async createEvent(task: Task): Promise<string> {
+    public async createEvent(task: Task, calendarId?: string): Promise<string> {
         if (!task.id) {
             throw new Error('Cannot create event for task without ID');
         }
 
-        return this.withLock(`task:${task.id}`, async () => {
+        const targetCalendarId = this.validateCalendarTarget(calendarId);
+        return this.withLock(`calendar:${targetCalendarId}:task:${task.id}`, async () => {
             try {
                 // First cleanup any existing events and get the ID of any event we should keep
-                const existingEventId = await this.cleanupExistingEvents(task.id);
+                const existingEventId = await this.cleanupExistingEvents(task.id, targetCalendarId);
 
                 if (existingEventId) {
                     LogUtils.debug(`Using existing event ${existingEventId} for task ${task.id}`);
                     // Update the existing event instead of creating a new one
                     const event = this.createEventFromTask(task);
-                    await this.makeRequest(`/calendars/primary/events/${existingEventId}`, 'PUT', event);
+                    await this.makeRequest(this.getCalendarEventsEndpoint(existingEventId, targetCalendarId), 'PUT', event);
                     return existingEventId;
                 }
 
                 // Create new event only if we don't have a valid existing one
                 const event = this.createEventFromTask(task);
-                const response = await this.makeRequest('/calendars/primary/events', 'POST', event);
+                const response = await this.makeRequest(this.getCalendarEventsEndpoint(undefined, targetCalendarId), 'POST', event);
                 if (!response.id) {
                     throw new Error('Failed to create event: no event ID returned');
                 }
@@ -850,8 +869,8 @@ export class CalendarSync {
             return false;
         }
 
-        // Check for DST transitions
-        const timezone = this.getTimezoneOffset();
+        // Validate using the offset applicable to the event date, not today's offset.
+        const timezone = this.getTimezoneOffset(date, time);
         const dateTime = time ? `${date}T${time}:00${timezone}` : date;
         const parsed = new Date(dateTime);
         if (isNaN(parsed.getTime())) {
@@ -862,31 +881,59 @@ export class CalendarSync {
         return true;
     }
 
+    private addDays(date: string, days: number): string {
+        const [year, month, day] = date.split('-').map(Number);
+        const value = new Date(Date.UTC(year, month - 1, day));
+        value.setUTCDate(value.getUTCDate() + days);
+        return value.toISOString().slice(0, 10);
+    }
+
+    private addMinutes(date: string, time: string, minutesToAdd: number): { date: string; time: string } {
+        const [year, month, day] = date.split('-').map(Number);
+        const [hours, minutes] = time.split(':').map(Number);
+        const value = new Date(Date.UTC(year, month - 1, day, hours, minutes));
+        value.setUTCMinutes(value.getUTCMinutes() + minutesToAdd);
+        return {
+            date: value.toISOString().slice(0, 10),
+            time: value.toISOString().slice(11, 16)
+        };
+    }
+
     private createEventFromTask(task: Task): GoogleCalendarEventInput {
-        // Validate date/time
-        if (!this.validateDateTime(task.date, task.time)) {
+        const isInformationalEvent = task.kind === 'event';
+        const effectiveTime = task.time || (isInformationalEvent
+            ? (this.plugin.settings.defaultMorningEventTime || '09:00')
+            : undefined);
+
+        if (!this.validateDateTime(task.date, effectiveTime)) {
             throw new Error('Invalid date/time format');
         }
 
-        const timezone = this.getTimezoneOffset();
-        const version = Date.now().toString(); // Add version tracking
+        const version = Date.now().toString();
+        const description =
+            'Managed by Obsidian Tasks Google Calendar Sync.\n' +
+            'Obsidian is the source of truth; edit this item in Obsidian.';
 
-        // Get reminder value - use default if no explicit reminder is set
-        const reminderMinutes = task.reminder ?? this.plugin.settings.defaultReminder;
-        const reminderOverrides = reminderMinutes ? [{
-            method: 'popup' as const,
-            minutes: reminderMinutes
-        }] : [];
+        if (!effectiveTime) {
+            const reminderOverrides = task.reminder !== undefined
+                ? [{ method: 'popup' as const, minutes: task.reminder }]
+                : (this.plugin.settings.allDayTaskRemindersEnabled
+                    ? [{
+                        method: 'popup' as const,
+                        minutes: this.plugin.settings.defaultAllDayTaskReminderMinutes
+                    }]
+                    : []);
 
-        if (!task.time) {
             return {
                 summary: task.title,
+                description,
                 start: { date: task.date },
-                end: { date: task.date },
+                end: { date: this.addDays(task.date, 1) },
                 extendedProperties: {
                     private: {
                         obsidianTaskId: task.id,
                         isObsidianTask: 'true',
+                        obsidianItemKind: task.kind || 'task',
                         version
                     }
                 },
@@ -897,34 +944,63 @@ export class CalendarSync {
             };
         }
 
-        // For time-specific events
-        const startDateTime = `${task.date}T${task.time}:00${timezone}`;
-        const endDateTime = task.endTime
-            ? `${task.date}T${task.endTime}:00${timezone}`
-            : `${task.date}T${task.time}:00${timezone}`;
+        const existingMetadata = this.plugin.settings.taskMetadata[task.id];
+        const eventTimeZone =
+            task.timeZone ||
+            existingMetadata?.timeZone ||
+            TimeUtils.getLocalTimeZone();
+
+        const reminderMinutes = task.reminder ?? (isInformationalEvent
+            ? this.plugin.settings.defaultInformationalEventReminderMinutes
+            : this.plugin.settings.defaultTimedTaskReminderMinutes);
+
+        const startDateTime = `${task.date}T${effectiveTime}:00`;
+
+        let endDate: string;
+        let endTime: string;
+
+        if (task.endTime) {
+            endDate = task.endTime <= effectiveTime ? this.addDays(task.date, 1) : task.date;
+            endTime = task.endTime;
+        } else {
+            const duration = task.durationMinutes ?? this.plugin.settings.defaultEventDurationMinutes ?? 5;
+            const calculatedEnd = this.addMinutes(task.date, effectiveTime, duration);
+            endDate = calculatedEnd.date;
+            endTime = calculatedEnd.time;
+        }
+
+        const endDateTime = `${endDate}T${endTime}:00`;
 
         return {
             summary: task.title,
-            start: { dateTime: startDateTime },
-            end: { dateTime: endDateTime },
+            description,
+            start: { dateTime: startDateTime, timeZone: eventTimeZone },
+            end: { dateTime: endDateTime, timeZone: eventTimeZone },
             extendedProperties: {
                 private: {
                     obsidianTaskId: task.id,
                     isObsidianTask: 'true',
+                    obsidianItemKind: task.kind || 'task',
                     version
                 }
             },
             reminders: {
                 useDefault: false,
-                overrides: reminderOverrides
+                overrides: [{
+                    method: 'popup',
+                    minutes: reminderMinutes
+                }]
             }
         };
     }
 
+    public async testConnection(): Promise<void> {
+        await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET', { maxResults: 1 });
+    }
+
     public async listEvents(): Promise<GoogleCalendarEvent[]> {
         try {
-            await this.checkRateLimit();
-            const response = await this.makeRequest('/calendars/primary/events', 'GET');
+            const response = await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET');
             return response.items || [];
         } catch (error) {
             LogUtils.error('Failed to list calendar events:', error);

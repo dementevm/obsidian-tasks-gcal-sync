@@ -1,5 +1,4 @@
 import { TFile } from 'obsidian';
-import type { Credentials, OAuth2Client } from 'google-auth-library';
 import "obsidian";
 
 declare module "obsidian" {
@@ -26,7 +25,10 @@ export interface Task {
     eventId?: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
+    kind?: 'task' | 'event';
+    timeZone?: string;
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -36,11 +38,16 @@ export interface Task {
 export interface TaskMetadata {
     filePath?: string;
     eventId?: string;
+    /** Calendar that owns eventId. eventId must never be reused against another calendar. */
+    calendarId?: string;
     title: string;
     date: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
+    kind?: 'task' | 'event';
+    timeZone?: string;
     completed: boolean;
     completedDate?: string;
     createdAt: number;
@@ -60,12 +67,29 @@ export interface TaskMetadata {
 
 export interface GoogleCalendarSettings {
     clientId: string;
+    /**
+     * Legacy plaintext client secret. Kept only for one-time migration to SecretStorage.
+     */
     clientSecret?: string;
+    /** SecretStorage entry name containing the Google OAuth client secret. */
+    clientSecretName: string;
+    /** HTTPS OAuth redirect bridge URL configured in Google Cloud. */
+    oauthRedirectUri: string;
     oauth2Tokens?: OAuth2Tokens;
     encryptedOAuth2Tokens?: string; // Encrypted tokens (replaces oauth2Tokens when encrypted)
     tokensEncrypted?: boolean; // Flag indicating tokens are stored encrypted
     syncEnabled: boolean;
+    calendarId: string;
+    primaryCalendarConfirmed: boolean;
+    scanEntireVault: boolean;
+    /** Legacy reminder setting kept for migration. */
     defaultReminder: number;
+    defaultTimedTaskReminderMinutes: number;
+    defaultInformationalEventReminderMinutes: number;
+    allDayTaskRemindersEnabled: boolean;
+    defaultAllDayTaskReminderMinutes: number;
+    defaultEventDurationMinutes: number;
+    defaultMorningEventTime: string;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
     taskIds: Record<string, string>;
@@ -73,8 +97,8 @@ export interface GoogleCalendarSettings {
     hasCompletedOnboarding?: boolean;
     mobileSyncLimit?: number; // Limit number of files to search on mobile (default: 100)
     mobileOptimizations?: boolean; // Enable mobile-specific optimizations (default: true)
-    tempAuthState?: string; // Temporary storage for mobile auth state parameter
-    tempCodeVerifier?: string; // Temporary storage for mobile auth code verifier
+    vaultSecretNamespace?: string;
+    settingsSchemaVersion?: number;
 }
 
 export interface Pos {
@@ -107,13 +131,6 @@ export interface CacheChangeEvent {
     file?: TFile;
 }
 
-export interface GoogleAuthManagerInterface {
-    getOAuth2Client(): OAuth2Client;
-    startAuthFlow(): Promise<void>;
-    refreshTokens(tokens: Credentials): Promise<Credentials>;
-    revokeTokens(tokens: Credentials): Promise<void>;
-    onunload(): Promise<void>;
-}
 
 // Constants for task versioning and validation
 export const CURRENT_TASK_VERSION = 1;
@@ -133,6 +150,7 @@ export interface ParsedTaskData {
     date?: string;
     time?: string;
     endTime?: string;
+    durationMinutes?: number;
     reminder?: number;
 }
 

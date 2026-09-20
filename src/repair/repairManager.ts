@@ -142,13 +142,24 @@ export class RepairManager {
             // Enhanced Sync phase - more robust rebuilding of events
             if (tasks.size > 0) {
                 const store = useStore.getState();
-                store.startSync();
                 store.enableTempSync();
 
                 try {
                     // Clear existing queue
                     store.clearSyncQueue();
-                    const taskArray = Array.from(tasks.values());
+                    const currentCalendarId = this.plugin.settings.calendarId.trim();
+                    const taskArray = Array.from(tasks.values()).filter(task => {
+                        if (!task.id) return false;
+                        const binding = this.plugin.settings.taskMetadata[task.id]?.calendarId;
+                        if (binding && binding !== currentCalendarId) {
+                            processed.add(task.id);
+                            LogUtils.debug(
+                                `Skipping task ${task.id} during repair: bound to calendar ${binding}, current target is ${currentCalendarId}`
+                            );
+                            return false;
+                        }
+                        return true;
+                    });
                     
                     // Group tasks into those with existing events and those without
                     const tasksWithEvents: Task[] = [];
@@ -207,7 +218,7 @@ export class RepairManager {
                                 const event = eventsByTaskId.get(task.id);
                                 if (event && this.plugin.calendarSync) {
                                     // Delete the event
-                                    await this.plugin.calendarSync.deleteEvent(event.id, task.id);
+                                    await this.plugin.calendarSync.deleteEvent(event.id, task.id, currentCalendarId);
                                     LogUtils.debug(`Deleted event ${event.id} for completed task ${task.id}`);
                                     
                                     // Clean up metadata
@@ -245,7 +256,13 @@ export class RepairManager {
                                 try {
                                     // Force create new event
                                     if (this.plugin.calendarSync) {
-                                        const eventId = await this.plugin.calendarSync.createEvent(task);
+                                        const eventId = await this.plugin.calendarSync.createEvent(task, currentCalendarId);
+                                        this.plugin.calendarSync.updateTaskMetadata(
+                                            task,
+                                            eventId,
+                                            this.plugin.settings.taskMetadata[task.id],
+                                            currentCalendarId
+                                        );
                                         processed.add(task.id);
                                         return { taskId: task.id, eventId, success: true };
                                     }
@@ -354,6 +371,53 @@ export class RepairManager {
         }
     }
 
+    public async previewOrphanCleanup(): Promise<{
+        activeItems: number;
+        orphanEvents: number;
+        orphanMetadata: number;
+        duplicateEvents: number;
+    }> {
+        const tasks = await this.getAllTasks();
+        const activeTaskIds = new Set(tasks.keys());
+        const calendarEvents = await this.plugin.calendarSync?.findAllObsidianEvents({ forceFresh: true }) || [];
+
+        let orphanEvents = 0;
+        let duplicateEvents = 0;
+        const counts = new Map<string, number>();
+
+        for (const event of calendarEvents) {
+            const taskId = event.extendedProperties?.private?.obsidianTaskId;
+            if (!taskId) continue;
+            counts.set(taskId, (counts.get(taskId) || 0) + 1);
+            if (!activeTaskIds.has(taskId)) orphanEvents++;
+        }
+
+        for (const [taskId, count] of counts) {
+            if (activeTaskIds.has(taskId) && count > 1) {
+                duplicateEvents += count - 1;
+            }
+        }
+
+        const orphanMetadata = Object.keys(this.plugin.settings.taskMetadata)
+            .filter(taskId => !activeTaskIds.has(taskId))
+            .length;
+
+        return {
+            activeItems: activeTaskIds.size,
+            orphanEvents,
+            orphanMetadata,
+            duplicateEvents
+        };
+    }
+
+    public async cleanupOrphansExplicitly(): Promise<void> {
+        const tasks = await this.getAllTasks();
+        const activeTaskIds = new Set(tasks.keys());
+        const calendarEvents = await this.plugin.calendarSync?.findAllObsidianEvents({ forceFresh: true }) || [];
+        await this.deleteOrphanedEvents(calendarEvents, activeTaskIds);
+        await this.cleanupOrphanedMetadata(activeTaskIds);
+    }
+
     public async deleteOrphanedEvents(
         calendarEvents: GoogleCalendarEvent[],
         activeTaskIds: Set<string>,
@@ -384,7 +448,11 @@ export class RepairManager {
                         let allDeletesSucceeded = true;
                         for (const event of events) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(event.id, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    event.id,
+                                    taskId,
+                                    this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted orphaned event ${event.id} for task ${taskId}`);
                             } catch (error) {
                                 LogUtils.error(`Failed to delete orphaned event ${event.id}:`, error);
@@ -409,7 +477,11 @@ export class RepairManager {
                         // Delete all but the most recent event
                         for (let i = 1; i < sortedEvents.length; i++) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(sortedEvents[i].id, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    sortedEvents[i].id,
+                                    taskId,
+                                    this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted duplicate event ${sortedEvents[i].id} for task ${taskId}`);
                             } catch (error) {
                                 LogUtils.error(`Failed to delete duplicate event ${sortedEvents[i].id}:`, error);
@@ -421,7 +493,8 @@ export class RepairManager {
                         if (metadata) {
                             this.plugin.settings.taskMetadata[taskId] = {
                                 ...metadata,
-                                eventId: sortedEvents[0].id
+                                eventId: sortedEvents[0].id,
+                                calendarId: this.plugin.settings.calendarId.trim()
                             };
                             await this.plugin.saveSettings();
                         }
@@ -468,7 +541,11 @@ export class RepairManager {
                         // If event still exists, delete it first
                         if (taskMetadata.eventId) {
                             try {
-                                await this.plugin.calendarSync?.deleteEvent(taskMetadata.eventId, taskId);
+                                await this.plugin.calendarSync?.deleteEvent(
+                                    taskMetadata.eventId,
+                                    taskId,
+                                    taskMetadata.calendarId || this.plugin.settings.calendarId.trim()
+                                );
                                 LogUtils.debug(`Deleted orphaned event ${taskMetadata.eventId} for task ${taskId}`);
                                 // Only delete metadata after successful event deletion
                                 delete metadata[taskId];
@@ -516,8 +593,11 @@ export class RepairManager {
         
         LogUtils.debug(`Searching for tasks in ${files.length} markdown files`);
         
-        // Force clear the file cache to ensure we get fresh content
+        // Explicit repair/preview must be able to parse while Auto-sync is OFF.
+        // tempSyncEnableCount is reference-counted, so nested callers remain safe.
         const state = useStore.getState();
+        state.enableTempSync();
+        try {
         
         // Process files in batches to avoid overwhelming the system
         const BATCH_SIZE = 20;
@@ -557,81 +637,16 @@ export class RepairManager {
             }
         }
         
-        LogUtils.debug(`Found a total of ${tasks.size} tasks with IDs across all files`);
-        return tasks;
+            LogUtils.debug(`Found a total of ${tasks.size} tasks with IDs across all files`);
+            return tasks;
+        } finally {
+            state.disableTempSync();
+        }
     }
 
     private async getMarkdownFiles(): Promise<TFile[]> {
-        // Get all markdown files in the vault
-        const allFiles = this.plugin.app.vault.getMarkdownFiles();
-        LogUtils.debug(`Found ${allFiles.length} total markdown files in vault`);
-        
-        // Log the include folder settings
-        const includeSettings = this.plugin.settings.includeFolders || [];
-        LogUtils.debug(`Folder inclusion settings: ${includeSettings.length > 0 ? JSON.stringify(includeSettings) : 'None (all files included)'}`);
-        
-        // If no include settings specified, return all markdown files
-        if (!includeSettings.length) {
-            LogUtils.debug(`Using all ${allFiles.length} markdown files for task search`);
-            return allFiles;
-        }
-        
-        // Create result array for matched files
-        const matchedFiles: TFile[] = [];
-        
-        // Process each inclusion path
-        for (const includePath of includeSettings) {
-            // Check if this is a direct file reference (not ending with /)
-            const isLikelyFile = !includePath.endsWith('/') && includePath.includes('.');
-            
-            if (isLikelyFile) {
-                // Try to get this specific file
-                const exactFile = allFiles.find(file => file.path === includePath);
-                if (exactFile) {
-                    LogUtils.debug(`Found exact file match: ${includePath}`);
-                    matchedFiles.push(exactFile);
-                    continue;
-                }
-            }
-            
-            // Handle as folder (strict matching with trailing slash)
-            const folderMatchedFiles = allFiles.filter(file => 
-                file.path === includePath || file.path.startsWith(includePath + '/')
-            );
-            
-            if (folderMatchedFiles.length > 0) {
-                LogUtils.debug(`Found ${folderMatchedFiles.length} files in folder: ${includePath}`);
-                matchedFiles.push(...folderMatchedFiles);
-                continue;
-            }
-            
-            // Try lenient folder matching (without trailing slash)
-            const folderNoSlash = includePath.endsWith('/') ? includePath.slice(0, -1) : includePath;
-            const lenientMatches = allFiles.filter(file => 
-                file.path === folderNoSlash || file.path.startsWith(folderNoSlash + '/')
-            );
-            
-            if (lenientMatches.length > 0) {
-                LogUtils.debug(`Found ${lenientMatches.length} files with lenient matching for: ${includePath}`);
-                matchedFiles.push(...lenientMatches);
-            }
-        }
-        
-        // Remove duplicates
-        const uniqueFiles = Array.from(new Set(matchedFiles.map(file => file.path)))
-            .map(path => allFiles.find(file => file.path === path))
-            .filter((file): file is TFile => file !== undefined);
-        
-        LogUtils.debug(`After filtering: ${uniqueFiles.length} markdown files match inclusion settings`);
-        
-        // If no files found after all approaches, use all files with a warning
-        if (uniqueFiles.length === 0) {
-            LogUtils.warn(`WARNING: No files match your folder inclusion settings. ` +
-                          `Using all vault files as a fallback for repair. ` +
-                          `Check your folder inclusion settings in the plugin settings.`);
-            return allFiles;
-        }
-        
-        return uniqueFiles;
+        // Repair uses exactly the same explicit scope as normal sync. There is
+        // intentionally no "fall back to the whole vault" behavior.
+        return this.plugin.taskParser.getFilteredFiles();
     }
 } 
