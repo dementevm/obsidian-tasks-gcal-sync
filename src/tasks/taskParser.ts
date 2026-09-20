@@ -93,9 +93,29 @@ export class TaskParser {
         return uniqueFiles;
     }
 
-    public isFileInScope(file: TFile): boolean {
+    public isPathInScope(filePath: string): boolean {
         if (this.plugin.settings.scanEntireVault) return true;
-        return this.getFilteredFiles().some(candidate => candidate.path === file.path);
+
+        const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (!normalizedPath) return false;
+
+        const includePaths = (this.plugin.settings.includeFolders || [])
+            .map(path => path.replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, ''))
+            .filter(Boolean);
+
+        if (includePaths.length === 0) return false;
+
+        return includePaths.some(includePath => {
+            const isLikelyFile = includePath.includes('.');
+            if (isLikelyFile) {
+                return normalizedPath === includePath;
+            }
+            return normalizedPath === includePath || normalizedPath.startsWith(includePath + '/');
+        });
+    }
+
+    public isFileInScope(file: TFile): boolean {
+        return this.isPathInScope(file.path);
     }
 
     public async parseTasksFromFile(file: TFile): Promise<Task[]> {
@@ -693,9 +713,11 @@ export class TaskParser {
     }
 
     public async getTaskById(taskId: string): Promise<Task | null> {
-        // First check the currently active file in the editor (handles unsaved changes)
+        // First check the currently active in-scope file in the editor
+        // (handles unsaved changes without allowing an out-of-scope editor to
+        // bypass the configured folder restriction).
         const activeFile = this.plugin.app.workspace.getActiveFile();
-        if (activeFile instanceof TFile) {
+        if (activeFile instanceof TFile && this.isFileInScope(activeFile)) {
             const activeView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
             if (activeView?.editor) {
                 try {
@@ -769,6 +791,11 @@ export class TaskParser {
      * @returns Array of parsed tasks
      */
     public async parseTasksFromContent(content: string, filePath: string): Promise<Task[]> {
+        if (!this.isPathInScope(filePath)) {
+            LogUtils.debug(`File ${filePath} is outside the configured sync scope, skipping editor content`);
+            return [];
+        }
+
         const tasks: Task[] = [];
         const lines = content.split('\n');
         let currentTaskLine = '';
