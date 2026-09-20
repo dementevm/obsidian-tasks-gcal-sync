@@ -47,6 +47,19 @@ Informational reminders/events use `📆` and do not have completion state:
 - 📆 Wife has a manicure 📅 2026-09-21
 ```
 
+The plugin adds a hidden `<!-- task-id: ... -->` marker to calendar-tracked
+items. For checkbox tasks it is stored immediately after the checkbox:
+
+```markdown
+- [ ] <!-- task-id: abc123 --> Recurring task 🔁 every day when done 📅 2026-09-20
+```
+
+This position is intentional: Obsidian Tasks parses recurrence/date metadata
+from the right side of the task. Putting an unknown HTML comment at the end of
+the line prevents Tasks from recognizing those fields. When Tasks creates the
+next recurring occurrence, the completed occurrence keeps its ID and the new
+occurrence receives a fresh one.
+
 For `📆` events with no explicit `⏰` time, the plugin uses the configurable
 **Morning Event Time** (09:00 by default) and creates a popup reminder at the
 event start. If neither `⏱` nor `➡️` is present, the event lasts 5 minutes

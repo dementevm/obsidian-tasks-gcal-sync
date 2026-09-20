@@ -222,6 +222,12 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
 
             // Initialize TokenController
             this.tokenController = new TokenController(this);
+
+            // Older plugin versions wrote <!-- task-id --> at the end of the
+            // line. Move existing IDs before Obsidian Tasks metadata before
+            // auto-sync handlers start observing file changes.
+            await this.tokenController.migrateTaskIdsForTasksCompatibility();
+
             const extension = this.tokenController.getExtension();
             this.registerEditorExtension([extension]);
 
