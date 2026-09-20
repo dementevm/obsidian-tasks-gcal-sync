@@ -5,59 +5,65 @@ Status date: 2026-09-20
 ## Completed
 
 - [x] Confirm upstream license is GPL-3.0 and keep this derivative GPL-3.0.
-- [x] Add prominent modification and attribution notice (`NOTICE`).
+- [x] Keep the canonical GPL-3.0 text in `LICENSE`.
+- [x] Add a separate prominent modification and attribution notice in `NOTICE`.
 - [x] Credit Sasoon Sarkisian as the original upstream author/contributor.
 - [x] Rewrite README for the derivative project and document why the fork exists.
 - [x] Document complete Google Cloud / OAuth Web client setup for end users.
-- [x] Require each user to provide their own Google OAuth Client ID and Client Secret.
-- [x] Document all network endpoints and the OAuth redirect bridge.
+- [x] Require every user to provide their own Google OAuth Client ID and Client Secret.
+- [x] Document all network endpoints and the static OAuth redirect bridge.
 - [x] Keep OAuth client secret and refresh token out of plugin `data.json`.
 - [x] Keep setup links free of client secrets, OAuth tokens, task metadata and primary-calendar consent.
-- [x] Prevent setup links from overriding the OAuth redirect bridge.
-- [x] Use a Community-directory-compatible plugin ID: `tasks-gcal-sync`.
+- [x] Prevent setup links from overriding the canonical OAuth redirect bridge.
+- [x] Use Community-directory-compatible plugin ID `tasks-gcal-sync`.
 - [x] Use strict semantic versioning in the public manifest.
 - [x] Reset `versions.json` to the public derivative compatibility line.
-- [x] Fix release workflow so Git tag must exactly match `manifest.version`.
-- [x] Add CI validation for manifest metadata and obvious committed/bundled secrets.
-- [x] Add production dependency audit to CI.
-- [x] Remove unused vulnerable Google client libraries and legacy custom crypto code.
+- [x] Remove private-development repository files (`.claude`, persistent `.github` workflows, legacy `.env.template`).
+- [x] Clean `.gitignore`, `.npmignore`, `package.json`, `package-lock.json`, and `esbuild.config.mjs`.
+- [x] Remove unused Google client libraries, legacy custom crypto code, Node polyfill build logic and unused development dependencies.
 - [x] Audit current source tree for dynamic code execution, unsafe HTML injection, shell execution and unexpected network endpoints.
-- [x] Check Git history for accidentally committed `.env`, credential/token JSON and plugin `data.json` files.
-- [x] Fix Calendar API concurrency/lock ownership and unsafe synthetic request timeout behavior.
-- [x] Avoid blind retry of ambiguous event-creation POST requests.
-- [x] Add pagination for managed Google Calendar event discovery.
+- [x] Check repository history for accidentally committed environment/credential/token/plugin-data files.
+- [x] Remove task titles, Markdown lines and vault paths from verbose logs where they are not required.
+- [x] Validate imported setup-link size/types and prevent it from importing primary-calendar consent or Auto-sync consent.
+- [x] Fix Calendar API concurrency/lock ownership.
+- [x] Avoid unsafe synthetic request timeouts and blind retry of ambiguous event-creation POST requests.
+- [x] Add/verify pagination for managed Google Calendar event discovery.
 - [x] Preserve failed queue items and expose failed sync state instead of silently reporting success.
-- [x] Fix recurring-task completion bypass of the post-enqueue cooldown filter.
+- [x] Fix recurring-task completion/ID races.
+- [x] Verify task deletion after a grace period across the configured scope before removing the Google event.
 - [x] Make plugin unload/reload non-destructive.
-- [x] Align reminder/duration/overnight validation with Calendar behavior.
-- [x] Improve reminder-modal input validation.
+- [x] Allow explicit zero-minute reminders (`🔔0m`).
 - [x] Create a public, verifiable upstream permission request:
       https://github.com/Sasoon/obsidian-gcal-sync/issues/33
 - [x] Create draft release-preparation PR #6.
-- [x] CI passes: manifest check, source secret scan, npm production audit, TypeScript/build, bundle secret scan.
+- [x] Run a temporary clean-build verification (`npm ci` + `npm run build`) and remove the temporary workflow afterward.
 
-## Required before making the repository public
+## Required smoke test before merge/public release
 
-- [ ] Smoke-test the release-prep build on desktop.
-- [ ] Smoke-test the release-prep build on iOS.
-- [ ] Verify one normal task: create → update → complete/delete.
-- [ ] Verify one recurring Obsidian Tasks occurrence: complete → new occurrence → exactly one new Calendar event.
-- [ ] Verify one informational `📆` event.
+- [ ] Install the build under the new plugin ID/folder `tasks-gcal-sync`.
+- [ ] Verify existing `data.json` migration from the old private folder `obsidian-tasks-gcal-sync`.
+- [ ] Desktop: connect/reconnect Google.
+- [ ] iOS: connect/reconnect Google.
+- [ ] Create → update → complete/delete one normal task.
+- [ ] Complete one recurring Obsidian Tasks occurrence and verify exactly one new Calendar event for the next occurrence.
+- [ ] Create/update/delete one informational `📆` event.
+- [ ] Verify `🔔0m`, timed reminders, duration and explicit end time.
 - [ ] Verify Auto-sync after restarting Obsidian.
-- [ ] Verify Google reconnect and token refresh.
 - [ ] Verify dedicated-calendar isolation.
+- [ ] Verify `primary` remains blocked until locally confirmed.
 - [ ] Verify setup-link import on a second device.
-- [ ] Verify the plugin-ID migration from `obsidian-tasks-gcal-sync` to `tasks-gcal-sync` without losing `data.json`.
+- [ ] Verify moving/cutting a tracked task between in-scope files does not delete its Calendar event.
 
 ## Publication
 
 - [ ] Merge PR #6 into `feature/separate-calendar` after the smoke test.
-- [ ] Merge the finished feature branch into the default `main` branch.
-- [ ] Change the GitHub repository visibility from private to public.
-- [ ] Confirm that no sensitive issue/PR/Actions log content becomes unintentionally public with the repository.
-- [ ] Wait for / obtain Sasoon's explicit written approval in upstream issue #33.
-- [ ] Tag the public release with exactly the version from `manifest.json` (currently `0.2.7`, not `v0.2.7`).
-- [ ] Verify the GitHub release contains `main.js`, `manifest.json` and `styles.css`.
-- [ ] Install the release once from GitHub/BRAT as a public beta.
+- [ ] Merge the finished feature branch into default `main`.
+- [ ] Change repository visibility from private to public.
+- [ ] Confirm that no private issue/PR/Actions-log content should remain private before changing visibility.
+- [ ] Obtain Sasoon's explicit written approval in upstream issue #33.
+- [ ] Create a release tag exactly matching `manifest.version` (currently `0.2.7`, not `v0.2.7`).
+- [ ] Run `npm ci && npm run build` from the release commit.
+- [ ] Create the GitHub Release manually and attach `main.js`, `manifest.json`, and `styles.css`.
+- [ ] Install the GitHub release once manually/with BRAT as a public beta.
 - [ ] Submit the public repository to the Obsidian Community Plugins directory.
 - [ ] Address any automated/manual Obsidian review feedback.
