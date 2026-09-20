@@ -84,22 +84,34 @@ export class TokenController {
         let remainder = withoutIds.slice(anchorMatch[0].length).trim()
         remainder = remainder.replace(/[ \t]{2,}/g, ' ')
 
-        // Reminder is our own metadata. Keep it next to the private ID so the
-        // user-visible title and Obsidian Tasks metadata remain contiguous.
-        const reminderMatch = remainder.match(/🔔\s*(\d+)([mhd])/)
-        let reminderText = ''
-        if (reminderMatch) {
-            reminderText = reminderMatch[0]
-            remainder = remainder
-                .replace(reminderText, '')
-                .replace(/[ \t]{2,}/g, ' ')
-                .trim()
+        // Our calendar-only metadata is unknown to Obsidian Tasks. Keep all
+        // of it immediately after the private ID so the user-visible title and
+        // Tasks-owned metadata (recurrence, due date, done date, etc.) remain
+        // contiguous at the end of the line. Tasks parses its metadata from the
+        // end, so a trailing ⏰/➡️/⏱/🔔 token can otherwise hide recurrence.
+        const calendarMetadataPatterns = [
+            /⏰\s*\d{1,2}:\d{2}/,
+            /➡️\s*\d{1,2}:\d{2}/,
+            /⏱\s*\d+[mh]/,
+            /🔔\s*\d+[mhd]/
+        ]
+
+        const calendarMetadata: string[] = []
+        for (const pattern of calendarMetadataPatterns) {
+            const match = remainder.match(pattern)
+            if (!match) continue
+            calendarMetadata.push(match[0])
+            remainder = remainder.replace(match[0], ' ')
         }
+
+        remainder = remainder
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim()
 
         return [
             anchorMatch[1],
             taskIdText,
-            reminderText,
+            ...calendarMetadata,
             remainder
         ].filter(Boolean).join(' ')
     }
