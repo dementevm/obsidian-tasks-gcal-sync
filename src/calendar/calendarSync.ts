@@ -14,8 +14,9 @@ import { Platform } from 'obsidian';
 
 interface GoogleCalendarEventInput {
     summary: string;
-    start: { date?: string; dateTime?: string };
-    end: { date?: string; dateTime?: string };
+    description?: string;
+    start: { date?: string; dateTime?: string; timeZone?: string };
+    end: { date?: string; dateTime?: string; timeZone?: string };
     extendedProperties: {
         private: {
             obsidianTaskId: string;
@@ -68,8 +69,19 @@ export class CalendarSync {
         this.plugin = plugin;
     }
 
+    private validateCalendarTarget(): void {
+        const calendarId = this.plugin.settings.calendarId?.trim();
+        if (!calendarId) {
+            throw new Error('Calendar ID is not configured.');
+        }
+        if (calendarId === 'primary' && !this.plugin.settings.primaryCalendarConfirmed) {
+            throw new Error('Primary calendar use has not been explicitly confirmed.');
+        }
+    }
+
     private getCalendarEventsEndpoint(eventId?: string): string {
-        const calendarId = encodeURIComponent(this.plugin.settings.calendarId || 'primary');
+        this.validateCalendarTarget();
+        const calendarId = encodeURIComponent(this.plugin.settings.calendarId.trim());
         return eventId
             ? `/calendars/${calendarId}/events/${encodeURIComponent(eventId)}`
             : `/calendars/${calendarId}/events`;
@@ -529,6 +541,7 @@ export class CalendarSync {
             durationMinutes: task.durationMinutes,
             reminder: task.reminder,
             kind: task.kind || 'task',
+            timeZone: task.timeZone || existingMetadata?.timeZone || TimeUtils.getLocalTimeZone(),
             completed: task.completed,
             createdAt: existingMetadata?.createdAt || currentTime,
             lastModified: currentTime,
@@ -898,28 +911,27 @@ export class CalendarSync {
             ? (this.plugin.settings.defaultMorningEventTime || '09:00')
             : undefined);
 
-        // Validate the effective time as informational events may inherit 09:00.
         if (!this.validateDateTime(task.date, effectiveTime)) {
             throw new Error('Invalid date/time format');
         }
-        const startTimezone = this.getTimezoneOffset(task.date, effectiveTime);
-        const version = Date.now().toString();
 
-        // Informational events without 🔔 remind at the event start (0 minutes before).
-        // Checkbox tasks retain the existing configurable default reminder.
-        const reminderMinutes = task.reminder ?? (isInformationalEvent
-            ? 0
-            : this.plugin.settings.defaultReminder);
-        const reminderOverrides = [{
-            method: 'popup' as const,
-            minutes: reminderMinutes
-        }];
+        const version = Date.now().toString();
+        const description =
+            'Managed by Obsidian Tasks Google Calendar Sync.\n' +
+            'Obsidian is the source of truth; edit this item in Obsidian.';
 
         if (!effectiveTime) {
+            const reminderOverrides = this.plugin.settings.allDayTaskRemindersEnabled
+                ? [{
+                    method: 'popup' as const,
+                    minutes: task.reminder ?? this.plugin.settings.defaultAllDayTaskReminderMinutes
+                }]
+                : [];
+
             return {
                 summary: task.title,
+                description,
                 start: { date: task.date },
-                // Google Calendar uses an exclusive end date for all-day events.
                 end: { date: this.addDays(task.date, 1) },
                 extendedProperties: {
                     private: {
@@ -936,9 +948,17 @@ export class CalendarSync {
             };
         }
 
-        // For time-specific events. Informational events without ⏰ use the configured
-        // morning time; checkbox tasks without ⏰ remain all-day events.
-        const startDateTime = `${task.date}T${effectiveTime}:00${startTimezone}`;
+        const existingMetadata = this.plugin.settings.taskMetadata[task.id];
+        const eventTimeZone =
+            task.timeZone ||
+            existingMetadata?.timeZone ||
+            TimeUtils.getLocalTimeZone();
+
+        const reminderMinutes = task.reminder ?? (isInformationalEvent
+            ? this.plugin.settings.defaultInformationalEventReminderMinutes
+            : this.plugin.settings.defaultTimedTaskReminderMinutes);
+
+        const startDateTime = `${task.date}T${effectiveTime}:00`;
 
         let endDate: string;
         let endTime: string;
@@ -953,13 +973,13 @@ export class CalendarSync {
             endTime = calculatedEnd.time;
         }
 
-        const endTimezone = this.getTimezoneOffset(endDate, endTime);
-        const endDateTime = `${endDate}T${endTime}:00${endTimezone}`;
+        const endDateTime = `${endDate}T${endTime}:00`;
 
         return {
             summary: task.title,
-            start: { dateTime: startDateTime },
-            end: { dateTime: endDateTime },
+            description,
+            start: { dateTime: startDateTime, timeZone: eventTimeZone },
+            end: { dateTime: endDateTime, timeZone: eventTimeZone },
             extendedProperties: {
                 private: {
                     obsidianTaskId: task.id,
@@ -970,9 +990,16 @@ export class CalendarSync {
             },
             reminders: {
                 useDefault: false,
-                overrides: reminderOverrides
+                overrides: [{
+                    method: 'popup',
+                    minutes: reminderMinutes
+                }]
             }
         };
+    }
+
+    public async testConnection(): Promise<void> {
+        await this.makeRequest(this.getCalendarEventsEndpoint(), 'GET', { maxResults: 1 });
     }
 
     public async listEvents(): Promise<GoogleCalendarEvent[]> {
