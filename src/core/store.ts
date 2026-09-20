@@ -606,11 +606,10 @@ export const store = createStore<TaskStore>()(
 
                             // Check if task was just synced
                             const metadata = state.plugin.settings.taskMetadata[task.id];
-                            if (metadata?.justSynced && metadata.syncTimestamp) {
+                            if (!task.completed && metadata?.justSynced && metadata.syncTimestamp) {
                                 const syncAge = Date.now() - metadata.syncTimestamp;
                                 if (syncAge < TIMING.JUST_SYNCED_WINDOW_MS) {
                                     LogUtils.debug(`Skipping task ${task.id} that was just synced ${syncAge}ms ago`);
-                                    // Also remove from queue since we're skipping it
                                     state.removeFromSyncQueue(task.id);
                                     return false;
                                 }
@@ -636,10 +635,15 @@ export const store = createStore<TaskStore>()(
 
                             LogUtils.debug(`Batch progress: ${i + batch.length}/${actualTaskCount} (${succeeded} succeeded, ${failed} failed)`);
 
-                            // Remove processed tasks from queue
-                            for (const task of batch) {
-                                if (task.id) {
+                            // Remove successful tasks from the queue. Failed tasks stay
+                            // queued and are also recorded in failedSyncs for a later retry.
+                            for (let resultIndex = 0; resultIndex < batch.length; resultIndex++) {
+                                const task = batch[resultIndex];
+                                const result = results[resultIndex];
+                                if (!task.id) continue;
+                                if (result.status === 'fulfilled') {
                                     state.removeFromSyncQueue(task.id);
+                                    state.clearSyncFailure(task.id);
                                 }
                             }
 
@@ -656,14 +660,26 @@ export const store = createStore<TaskStore>()(
                             }
                         }
 
+                        const remainingFailures = get().failedSyncs.size;
+                        if (remainingFailures > 0) {
+                            throw new Error(`${remainingFailures} calendar item(s) failed to sync`);
+                        }
                         LogUtils.debug('✅ Full sync completed');
                     } catch (error) {
-                        LogUtils.error('Failed to process sync queue:', error);
+                        const syncError = error instanceof Error ? error : new Error(String(error));
+                        LogUtils.error('Failed to process sync queue:', syncError);
+                        set(state => {
+                            state.error = syncError;
+                            state.status = 'error';
+                        });
+                        throw syncError;
                     } finally {
                         set(state => {
                             state.processingBatch = false;
                             state.syncInProgress = false;
-                            state.status = 'connected';
+                            if (state.status !== 'error') {
+                                state.status = 'connected';
+                            }
                             state.lastSyncTime = Date.now();
                         });
                     }
