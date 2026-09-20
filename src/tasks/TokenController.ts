@@ -1,6 +1,6 @@
 import { Extension, StateField, StateEffect, RangeSet, RangeSetBuilder, EditorState, Transaction } from "@codemirror/state"
 import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate } from "@codemirror/view"
-import { TFile, Editor, Platform } from "obsidian"
+import { TFile, TAbstractFile, Editor, Platform } from "obsidian"
 import type GoogleCalendarSyncPlugin from '../core/main'
 import { LogUtils } from '../utils/logUtils'
 import { ErrorUtils } from '../utils/errorUtils'
@@ -438,7 +438,8 @@ export class TokenController {
 
         // Handle file modifications
         this.plugin.registerEvent(
-            this.plugin.app.vault.on('modify', async (file: TFile) => {
+            this.plugin.app.vault.on('modify', async (file: TAbstractFile) => {
+                if (!(file instanceof TFile)) return
                 if (this.modifyLock) return
                 if (!this.plugin.taskParser.isFileInScope(file)) return
 
