@@ -1,7 +1,8 @@
 {
     "id": "obsidian-tasks-gcal-sync",
     "protocols": [
-        "auth/gcalsync"
+        "auth/gcalsync",
+        "tasks-gcal-sync/setup"
     ],
     "name": "Tasks Google Calendar Sync",
     "version": "0.2.0-private.3",
