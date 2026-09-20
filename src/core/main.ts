@@ -278,7 +278,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             this.registerEventHandlers();
 
             // Start periodic cleanup
-            this.startPeriodicCleanup();
+            this.startPeriodicStateCleanup();
 
             // NOTE: File change monitoring is handled in registerEventHandlers()
             // with proper debouncing to prevent double-syncing
@@ -606,11 +606,11 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         }
     }
 
-    private startPeriodicCleanup() {
-        // Run cleanup every 5 minutes
+    private startPeriodicStateCleanup() {
+        // Clear stale in-memory processing locks only. This never deletes Calendar events.
         this.cleanupInterval = window.setInterval(() => {
             useStore.getState().clearStaleProcessingTasks();
-        }, TIMING.PERIODIC_CLEANUP_INTERVAL_MS);
+        }, TIMING.PERIODIC_STATE_CLEANUP_INTERVAL_MS);
     }
 
     private async getAllTasks(): Promise<Task[]> {
@@ -730,7 +730,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
         // One-time migration from the upstream plugin, where the OAuth client
         // secret could be stored directly in data.json.
         if (this.settings.clientSecret) {
-            const migratedSecretName = 'obsidian-tasks-gcal-sync-client-secret';
+            const migratedSecretName = 'tasks-gcal-sync-client-secret';
             this.app.secretStorage.setSecret(migratedSecretName, this.settings.clientSecret);
             this.settings.clientSecretName = migratedSecretName;
             this.settings.clientSecret = undefined;
@@ -751,8 +751,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
     }
 
     private initializeRibbonIcon() {
-        return this.addRibbonIcon('calendar-clock', 'Google Calendar Sync', (e: MouseEvent) => {
-            // Check both the authManager and the store state
+        const ribbonIcon = this.addRibbonIcon('calendar-clock', 'Google Calendar Sync', (e: MouseEvent) => {
             const storeAuthenticated = useStore.getState().authenticated;
             const authManagerAuthenticated = this.authManager?.isAuthenticated() || false;
 
@@ -762,6 +761,9 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
                 this.showSyncMenu(e);
             }
         });
+
+        ribbonIcon.addClass('gcal-sync-ribbon');
+        return ribbonIcon;
     }
 
     private updateRibbonStatus(status: TaskStore['status']): void {
