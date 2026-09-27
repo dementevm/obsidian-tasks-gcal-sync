@@ -94,6 +94,22 @@ Type `@` in a Markdown list item:
 
 Shortcuts can be entered while editing an existing tracked line, including after an existing date such as `📅 2026-09-21 @time`. Calendar-only metadata is normalized without moving the editing cursor.
 
+Suggestions also appear on Obsidian Tasks checkbox lines: `@ti` offers `⏰ Time` without typing the whole word. The Tasks suggestion menu keeps working for everything that does not start with a matching `@` shortcut.
+
+### Date picker
+
+After `@date` (typed in full or picked from suggestions) a small form opens with a native date picker and optional **Time**, **Duration** and **Reminder** fields. Empty fields fall back to the defaults from settings. For example:
+
+```markdown
+- [ ] Dentist 📅 2026-09-21 ⏰ 14:30 ⏱45m 🔔30m
+```
+
+Press **Cancel** (or `Esc`) to type the date manually instead.
+
+In Live Preview, clicking or tapping the `📅` icon of a `📆` event opens the same form pre-filled with the event's date, time, duration and reminder; **Save** rewrites them in place. Checkbox task lines are not affected, so the Obsidian Tasks editing behavior stays the same.
+
+Both behaviors can be turned off with **Date picker for 📅** in settings.
+
 There is also a **Tasks GCal: Create calendar reminder** command that inserts a `📆` item using a small form.
 
 ### Time-zone preservation
