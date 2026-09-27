@@ -28,6 +28,23 @@ function durationToMinutes(value: string): number {
     return match[2] === 'h' ? amount * 60 : amount;
 }
 
+/** Validates optional duration/reminder input; returns the ` ⏱… 🔔…` suffix, or null after showing a Notice. */
+export function formatDurationReminder(durationInput: string, reminderInput: string): string | null {
+    const reminder = normalizeOffset(reminderInput);
+    if (reminder === null || (reminder && offsetToMinutes(reminder) > 40320)) {
+        new Notice('Reminder must look like 30m, 2h, or 1d and be no more than 28 days.');
+        return null;
+    }
+
+    const duration = normalizeDuration(durationInput);
+    if (duration === null || (duration && durationToMinutes(duration) > 1440)) {
+        new Notice('Duration must look like 20m or 1h and be no more than 24 hours.');
+        return null;
+    }
+
+    return (duration ? ` ⏱${duration}` : '') + (reminder ? ` 🔔${reminder}` : '');
+}
+
 export class ReminderModal extends Modal {
     private title = '';
     private date = TimeUtils.getCurrentDate();
@@ -104,22 +121,12 @@ export class ReminderModal extends Modal {
             return;
         }
 
-        const reminder = normalizeOffset(this.reminder);
-        if (reminder === null || (reminder && offsetToMinutes(reminder) > 40320)) {
-            new Notice('Reminder must look like 30m, 2h, or 1d and be no more than 28 days.');
-            return;
-        }
-
-        const duration = normalizeDuration(this.duration);
-        if (duration === null || (duration && durationToMinutes(duration) > 1440)) {
-            new Notice('Duration must look like 20m or 1h and be no more than 24 hours.');
-            return;
-        }
+        const extras = formatDurationReminder(this.duration, this.reminder);
+        if (extras === null) return;
 
         let line = `- 📆 ${this.title} 📅 ${this.date}`;
         if (this.time) line += ` ⏰ ${this.time}`;
-        if (duration) line += ` ⏱${duration}`;
-        if (reminder) line += ` 🔔${reminder}`;
+        line += extras;
 
         const cursor = this.editor.getCursor();
         const currentLine = this.editor.getLine(cursor.line);

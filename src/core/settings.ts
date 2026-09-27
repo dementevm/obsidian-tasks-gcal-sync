@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     defaultAllDayTaskReminderMinutes: 0,
     defaultEventDurationMinutes: 5,
     defaultMorningEventTime: '09:00',
+    openDatePickerOnDateShortcut: true,
     includeFolders: [],
     taskMetadata: {},
     taskIds: {},
@@ -262,6 +263,16 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                         this.plugin.settings.defaultMorningEventTime = normalized;
                         await this.plugin.saveSettings();
                     }
+                }));
+
+        new Setting(containerEl)
+            .setName('Date picker after @date')
+            .setDesc('Open a date/time picker after the @date shortcut. Off: only 📅 is inserted.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.openDatePickerOnDateShortcut)
+                .onChange(async (value) => {
+                    this.plugin.settings.openDatePickerOnDateShortcut = value;
+                    await this.plugin.saveSettings();
                 }));
 
         new Setting(containerEl)

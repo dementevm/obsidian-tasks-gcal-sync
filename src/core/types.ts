@@ -90,6 +90,7 @@ export interface GoogleCalendarSettings {
     defaultAllDayTaskReminderMinutes: number;
     defaultEventDurationMinutes: number;
     defaultMorningEventTime: string;
+    openDatePickerOnDateShortcut: boolean;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
     taskIds: Record<string, string>;

@@ -232,7 +232,7 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             this.registerEditorExtension([extension]);
 
             // Calendar metadata autocomplete: @event, @time, @rem, @dur, etc.
-            this.registerEditorSuggest(new CalendarTokenSuggest(this.app));
+            this.registerEditorSuggest(new CalendarTokenSuggest(this));
 
             this.addCommand({
                 id: 'create-calendar-reminder',

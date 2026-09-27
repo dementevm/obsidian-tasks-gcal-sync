@@ -6,6 +6,7 @@ import { LogUtils } from '../utils/logUtils'
 import { ErrorUtils } from '../utils/errorUtils'
 import { IdUtils } from '../utils/idUtils'
 import debounce from 'just-debounce-it'
+import { DateTimePickerModal } from '../ui/DateTimePickerModal'
 
 
 class ZeroWidthWidget extends WidgetType {
@@ -955,6 +956,7 @@ export class TokenController {
             if (!tr.docChanged) return tr
 
             const replacements: { from: number; to: number; insert: string }[] = []
+            let openDatePicker = false
             const aliases: Record<string, string> = {
                 date: '📅 ',
                 time: '⏰ ',
@@ -998,9 +1000,18 @@ export class TokenController {
                     to: toB,
                     insert: leadingSpace + replacement
                 })
+                if (key === 'date' && tr.isUserEvent('input') &&
+                    this.plugin.settings.openDatePickerOnDateShortcut) openDatePicker = true
             })
 
             if (replacements.length === 0) return tr
+            if (openDatePicker) {
+                // Open after this transaction is applied, not inside the filter.
+                window.setTimeout(() => {
+                    const editor = this.plugin.app.workspace.activeEditor?.editor
+                    if (editor) new DateTimePickerModal(this.plugin, editor).open()
+                })
+            }
             return [tr, { changes: replacements, sequential: true }]
         })
 
