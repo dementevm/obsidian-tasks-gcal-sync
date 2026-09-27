@@ -105,15 +105,25 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
             return null;
         }
 
+        const query = match[1] ?? '';
+        // We run before Tasks' suggest; don't swallow its popup for "@john" etc.
+        if (this.matchSuggestions(query).length === 0) {
+            return null;
+        }
+
         return {
             start: { line: cursor.line, ch: atIndex },
             end: cursor,
-            query: match[1] ?? ''
+            query
         };
     }
 
     getSuggestions(context: EditorSuggestContext): CalendarTokenSuggestion[] {
-        const query = context.query.toLowerCase();
+        return this.matchSuggestions(context.query);
+    }
+
+    private matchSuggestions(rawQuery: string): CalendarTokenSuggestion[] {
+        const query = rawQuery.toLowerCase();
         if (!query) {
             return SUGGESTIONS;
         }

@@ -232,7 +232,20 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             this.registerEditorExtension([extension]);
 
             // Calendar metadata autocomplete: @event, @time, @rem, @dur, etc.
-            this.registerEditorSuggest(new CalendarTokenSuggest(this));
+            const tokenSuggest = new CalendarTokenSuggest(this);
+            this.registerEditorSuggest(tokenSuggest);
+            // Obsidian shows the first suggest whose trigger matches, and Tasks'
+            // suggest matches every task line. Ours only matches "@…", so going
+            // first leaves Tasks untouched everywhere else.
+            // ponytail: private API (editorSuggest.suggests); if it disappears we
+            // silently fall back to registration order.
+            const suggests: unknown = (this.app.workspace as unknown as {
+                editorSuggest?: { suggests?: unknown }
+            }).editorSuggest?.suggests;
+            if (Array.isArray(suggests) && suggests.includes(tokenSuggest)) {
+                suggests.splice(suggests.indexOf(tokenSuggest), 1);
+                suggests.unshift(tokenSuggest);
+            }
 
             this.addCommand({
                 id: 'create-calendar-reminder',
