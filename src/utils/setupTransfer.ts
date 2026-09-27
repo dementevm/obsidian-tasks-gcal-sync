@@ -14,8 +14,6 @@ export interface ShareableCalendarSetup {
     defaultAllDayTaskReminderMinutes: number;
     defaultEventDurationMinutes: number;
     defaultMorningEventTime: string;
-    mobileOptimizations: boolean;
-    mobileSyncLimit: number;
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -50,9 +48,7 @@ export function createShareableSetup(settings: GoogleCalendarSettings): Shareabl
         allDayTaskRemindersEnabled: settings.allDayTaskRemindersEnabled,
         defaultAllDayTaskReminderMinutes: settings.defaultAllDayTaskReminderMinutes,
         defaultEventDurationMinutes: settings.defaultEventDurationMinutes,
-        defaultMorningEventTime: settings.defaultMorningEventTime,
-        mobileOptimizations: settings.mobileOptimizations ?? true,
-        mobileSyncLimit: settings.mobileSyncLimit ?? 100
+        defaultMorningEventTime: settings.defaultMorningEventTime
     };
 }
 
@@ -95,9 +91,7 @@ export function decodeSetup(encoded: string): ShareableCalendarSetup {
         !validFiniteNumber(parsed.defaultAllDayTaskReminderMinutes, 0, 40320) ||
         !validFiniteNumber(parsed.defaultEventDurationMinutes, 1, 1440) ||
         typeof parsed.defaultMorningEventTime !== 'string' ||
-        !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(parsed.defaultMorningEventTime) ||
-        typeof parsed.mobileOptimizations !== 'boolean' ||
-        !validFiniteNumber(parsed.mobileSyncLimit, 1, 10000)) {
+        !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(parsed.defaultMorningEventTime)) {
         throw new Error('Invalid setup link: settings values.');
     }
 
@@ -112,9 +106,7 @@ export function decodeSetup(encoded: string): ShareableCalendarSetup {
         allDayTaskRemindersEnabled: parsed.allDayTaskRemindersEnabled,
         defaultAllDayTaskReminderMinutes: parsed.defaultAllDayTaskReminderMinutes,
         defaultEventDurationMinutes: parsed.defaultEventDurationMinutes,
-        defaultMorningEventTime: parsed.defaultMorningEventTime,
-        mobileOptimizations: parsed.mobileOptimizations,
-        mobileSyncLimit: parsed.mobileSyncLimit
+        defaultMorningEventTime: parsed.defaultMorningEventTime
     };
 }
 
@@ -142,8 +134,6 @@ export function applyShareableSetup(
         defaultAllDayTaskReminderMinutes: setup.defaultAllDayTaskReminderMinutes,
         defaultEventDurationMinutes: setup.defaultEventDurationMinutes,
         defaultMorningEventTime: setup.defaultMorningEventTime,
-        mobileOptimizations: setup.mobileOptimizations,
-        mobileSyncLimit: setup.mobileSyncLimit,
         syncEnabled: false
     };
 }

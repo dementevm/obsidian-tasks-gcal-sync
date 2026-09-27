@@ -95,8 +95,6 @@ export interface GoogleCalendarSettings {
     taskIds: Record<string, string>;
     verboseLogging: boolean;
     hasCompletedOnboarding?: boolean;
-    mobileSyncLimit?: number; // Limit number of files to search on mobile (default: 100)
-    mobileOptimizations?: boolean; // Enable mobile-specific optimizations (default: true)
     vaultSecretNamespace?: string;
     settingsSchemaVersion?: number;
 }
