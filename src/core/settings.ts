@@ -266,8 +266,8 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Date picker after @date')
-            .setDesc('Open a date/time picker after the @date shortcut. Off: only 📅 is inserted.')
+            .setName('Date picker for 📅')
+            .setDesc('Open a date/time picker after the @date shortcut and on click of 📅 in 📆 events (Live Preview). Off: only 📅 is inserted.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.openDatePickerOnDateShortcut)
                 .onChange(async (value) => {
