@@ -20,13 +20,12 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     defaultAllDayTaskReminderMinutes: 0,
     defaultEventDurationMinutes: 5,
     defaultMorningEventTime: '09:00',
+    openDatePickerOnDateShortcut: true,
     includeFolders: [],
     taskMetadata: {},
     taskIds: {},
     verboseLogging: false,
     hasCompletedOnboarding: true,  // Set to true to prevent welcome modal on startup
-    mobileSyncLimit: 100,  // Default to 100 files on mobile
-    mobileOptimizations: true,  // Enable mobile optimizations by default
     settingsSchemaVersion: 3,
 };
 
@@ -267,6 +266,16 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
+            .setName('Date picker for 📅')
+            .setDesc('Open a date/time picker after the @date shortcut and on click of 📅 in 📆 events (Live Preview). Off: only 📅 is inserted.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.openDatePickerOnDateShortcut)
+                .onChange(async (value) => {
+                    this.plugin.settings.openDatePickerOnDateShortcut = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
             .setName('Verbose Logging')
             .setDesc('Enable detailed debug logging (useful for troubleshooting)')
             .addToggle(toggle => toggle
@@ -274,33 +283,6 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
                 .onChange(async (value) => {
                     this.plugin.settings.verboseLogging = value;
                     await this.plugin.saveSettings();
-                }));
-
-        // Mobile Settings Section
-        containerEl.createEl('h3', { text: 'Mobile Optimizations' });
-
-        new Setting(containerEl)
-            .setName('Enable Mobile Optimizations')
-            .setDesc('Apply mobile-specific optimizations for better performance on mobile devices')
-            .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.mobileOptimizations ?? true)
-                .onChange(async (value) => {
-                    this.plugin.settings.mobileOptimizations = value;
-                    await this.plugin.saveSettings();
-                }));
-
-        new Setting(containerEl)
-            .setName('Mobile Sync File Limit')
-            .setDesc('Maximum number of files to scan for tasks on mobile devices (lower values improve performance)')
-            .addText(text => text
-                .setPlaceholder('100')
-                .setValue((this.plugin.settings.mobileSyncLimit ?? 100).toString())
-                .onChange(async (value) => {
-                    const limit = parseInt(value);
-                    if (!isNaN(limit) && limit > 0) {
-                        this.plugin.settings.mobileSyncLimit = limit;
-                        await this.plugin.saveSettings();
-                    }
                 }));
 
         containerEl.createEl('h3', { text: 'Device Setup Transfer' });

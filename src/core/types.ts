@@ -90,13 +90,12 @@ export interface GoogleCalendarSettings {
     defaultAllDayTaskReminderMinutes: number;
     defaultEventDurationMinutes: number;
     defaultMorningEventTime: string;
+    openDatePickerOnDateShortcut: boolean;
     includeFolders: string[];
     taskMetadata: Record<string, TaskMetadata>;
     taskIds: Record<string, string>;
     verboseLogging: boolean;
     hasCompletedOnboarding?: boolean;
-    mobileSyncLimit?: number; // Limit number of files to search on mobile (default: 100)
-    mobileOptimizations?: boolean; // Enable mobile-specific optimizations (default: true)
     vaultSecretNamespace?: string;
     settingsSchemaVersion?: number;
 }

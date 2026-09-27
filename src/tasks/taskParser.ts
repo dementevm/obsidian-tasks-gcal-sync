@@ -9,6 +9,11 @@ import { TimeUtils } from '../utils/timeUtils';
 import { hasTaskChanged } from '../utils/taskUtils';
 import { Platform } from 'obsidian';
 
+export const DATE_PATTERN = /📅\s*(\d{4}-\d{2}-\d{2})/;
+export const TIME_PATTERN = /⏰\s*(\d{1,2}:\d{2})/;
+export const DURATION_PATTERN = /⏱\s*(\d+)([mh])/;
+export const REMINDER_PATTERN = /🔔\s*(\d+)([mhd])/;
+
 export class TaskId {
     private static readonly PATTERN = /<!-- task-id: [a-z0-9]+ -->/;
 
@@ -18,11 +23,11 @@ export class TaskId {
 }
 
 export class TaskParser {
-    private readonly DATE_PATTERN = /📅\s*(\d{4}-\d{2}-\d{2})/;
-    private readonly TIME_PATTERN = /⏰\s*(\d{1,2}:\d{2})/;
+    private readonly DATE_PATTERN = DATE_PATTERN;
+    private readonly TIME_PATTERN = TIME_PATTERN;
     private readonly END_TIME_PATTERN = /➡️\s*(\d{1,2}:\d{2})/;
-    private readonly DURATION_PATTERN = /⏱\s*(\d+)([mh])/;
-    private readonly REMINDER_PATTERN = /🔔\s*(\d+)([mhd])/;
+    private readonly DURATION_PATTERN = DURATION_PATTERN;
+    private readonly REMINDER_PATTERN = REMINDER_PATTERN;
     private readonly TASK_PATTERN = /^- \[[ xX]\] (.+)/;
     private readonly EVENT_PATTERN = /^- 📆\s+(.+)/;
     private readonly COMPLETION_PATTERN = /✅\s*(\d{4}-\d{2}-\d{2})/;

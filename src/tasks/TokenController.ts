@@ -1,11 +1,12 @@
 import { Extension, StateField, StateEffect, RangeSet, RangeSetBuilder, EditorState, Transaction } from "@codemirror/state"
 import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate } from "@codemirror/view"
-import { TFile, TAbstractFile, Editor, Platform } from "obsidian"
+import { TFile, TAbstractFile, Editor, Platform, editorInfoField, editorLivePreviewField } from "obsidian"
 import type GoogleCalendarSyncPlugin from '../core/main'
 import { LogUtils } from '../utils/logUtils'
 import { ErrorUtils } from '../utils/errorUtils'
 import { IdUtils } from '../utils/idUtils'
 import debounce from 'just-debounce-it'
+import { DateTimePickerModal } from '../ui/DateTimePickerModal'
 
 
 class ZeroWidthWidget extends WidgetType {
@@ -955,6 +956,7 @@ export class TokenController {
             if (!tr.docChanged) return tr
 
             const replacements: { from: number; to: number; insert: string }[] = []
+            let openDatePicker = false
             const aliases: Record<string, string> = {
                 date: '📅 ',
                 time: '⏰ ',
@@ -998,10 +1000,52 @@ export class TokenController {
                     to: toB,
                     insert: leadingSpace + replacement
                 })
+                if (key === 'date' && tr.isUserEvent('input') &&
+                    this.plugin.settings.openDatePickerOnDateShortcut) openDatePicker = true
             })
 
             if (replacements.length === 0) return tr
+            if (openDatePicker) {
+                // Open after this transaction is applied, not inside the filter.
+                window.setTimeout(() => {
+                    const editor = this.plugin.app.workspace.activeEditor?.editor
+                    if (editor) new DateTimePickerModal(this.plugin, editor).open()
+                })
+            }
             return [tr, { changes: replacements, sequential: true }]
+        })
+
+        // Click on 📅 in a 📆 event line (Live Preview only) opens the picker.
+        // Obsidian Tasks ignores 📆 lines (no checkbox), so this cannot clash
+        // with its own handlers; task lines are deliberately left alone.
+        const eventDatePickerOnClick = EditorView.domEventHandlers({
+            mousedown: (event, view) => {
+                if (event.button !== 0) return false
+                if (!this.plugin.settings.openDatePickerOnDateShortcut) return false
+                if (!view.state.field(editorLivePreviewField, false)) return false
+
+                const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+                if (pos === null) return false
+                const line = view.state.doc.lineAt(pos)
+                if (!/^\s*-\s+📆\s+/.test(line.text)) return false
+
+                const hitsEmoji = [...line.text.matchAll(/📅/g)].some(match => {
+                    const start = line.from + (match.index ?? 0)
+                    const left = view.coordsAtPos(start, 1)
+                    const right = view.coordsAtPos(start + match[0].length, -1)
+                    return !!left && !!right &&
+                        event.clientX >= left.left && event.clientX <= right.right &&
+                        event.clientY >= left.top && event.clientY <= left.bottom
+                })
+                if (!hitsEmoji) return false
+
+                const editor = view.state.field(editorInfoField, false)?.editor
+                if (!editor) return false
+
+                event.preventDefault()
+                new DateTimePickerModal(this.plugin, editor, line.number - 1).open()
+                return true
+            }
         })
 
         return [
@@ -1009,6 +1053,7 @@ export class TokenController {
             atomicRanges,
             preventDeletion,
             calendarShortcutExpander,
+            eventDatePickerOnClick,
             taskCreationPlugin
         ];
     }

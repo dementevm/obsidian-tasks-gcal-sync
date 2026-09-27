@@ -1,5 +1,4 @@
 import {
-    App,
     Editor,
     EditorPosition,
     EditorSuggest,
@@ -7,6 +6,8 @@ import {
     EditorSuggestTriggerInfo,
     TFile
 } from 'obsidian';
+import type GoogleCalendarSyncPlugin from '../core/main';
+import { DateTimePickerModal } from '../ui/DateTimePickerModal';
 
 interface CalendarTokenSuggestion {
     key: string;
@@ -62,8 +63,8 @@ const SUGGESTIONS: CalendarTokenSuggestion[] = [
 ];
 
 export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion> {
-    constructor(app: App) {
-        super(app);
+    constructor(private plugin: GoogleCalendarSyncPlugin) {
+        super(plugin.app);
         this.limit = 8;
     }
 
@@ -104,15 +105,25 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
             return null;
         }
 
+        const query = match[1] ?? '';
+        // We run before Tasks' suggest; don't swallow its popup for "@john" etc.
+        if (this.matchSuggestions(query).length === 0) {
+            return null;
+        }
+
         return {
             start: { line: cursor.line, ch: atIndex },
             end: cursor,
-            query: match[1] ?? ''
+            query
         };
     }
 
     getSuggestions(context: EditorSuggestContext): CalendarTokenSuggestion[] {
-        const query = context.query.toLowerCase();
+        return this.matchSuggestions(context.query);
+    }
+
+    private matchSuggestions(rawQuery: string): CalendarTokenSuggestion[] {
+        const query = rawQuery.toLowerCase();
         if (!query) {
             return SUGGESTIONS;
         }
@@ -137,16 +148,21 @@ export class CalendarTokenSuggest extends EditorSuggest<CalendarTokenSuggestion>
             return;
         }
 
-        const line = this.context.editor.getLine(this.context.start.line);
+        const editor = this.context.editor;
+        const line = editor.getLine(this.context.start.line);
         const charBefore = this.context.start.ch > 0
             ? line.charAt(this.context.start.ch - 1)
             : '';
         const leadingSpace = charBefore && !/\s/.test(charBefore) ? ' ' : '';
 
-        this.context.editor.replaceRange(
+        editor.replaceRange(
             `${leadingSpace}${value.token} `,
             this.context.start,
             this.context.end
         );
+
+        if (value.key === 'date' && this.plugin.settings.openDatePickerOnDateShortcut) {
+            new DateTimePickerModal(this.plugin, editor).open();
+        }
     }
 }
