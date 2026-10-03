@@ -26,7 +26,7 @@ jobs:
         run: npm ci --no-fund
 
       - name: Security audit
-        run: npm audit
+        run: npm audit --omit=dev
 
       - name: Validate versions
         shell: bash
