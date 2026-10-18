@@ -1,6 +1,6 @@
 # Public release checklist
 
-Status date: 2026-09-20
+Status date: 2026-10-18
 
 ## Repository and legal
 
@@ -75,19 +75,20 @@ Status date: 2026-09-20
 ## Dependencies and build
 
 - [x] Update stale dependencies and commit both package.json and package-lock.json.
-- [x] Run npm audit with zero known vulnerabilities.
+- [x] Run `npm audit --omit=dev` with no known production dependency vulnerabilities. Full `npm audit` reports a development-only `obsidian` → `moment` advisory.
 - [x] Run a clean local npm ci && npm run build.
 - [x] Add GitHub Build workflow:
   - clean npm ci;
-  - npm audit;
+  - `npm audit --omit=dev`;
   - version consistency checks;
   - typecheck/production build;
   - installable tasks-gcal-sync-<version>.zip artifact.
 - [x] Add GitHub Release workflow:
   - strict x.y.z tag validation;
   - tag/package/manifest/versions consistency checks;
-  - clean build and audit;
-  - automatic GitHub Release with ZIP, main.js, manifest.json, and styles.css.
+  - clean build and production-dependency audit;
+  - automatic GitHub Release with ZIP, main.js, manifest.json, and styles.css;
+  - manual dispatch on an existing tag to recover a failed release without moving the tag.
 - [x] Confirm the new Build workflow is green on the release-preparation commit.
 
 ## Functional smoke test
@@ -156,7 +157,8 @@ Legacy private-build migration is manual: back up/copy the old data.json if need
   - main.js;
   - manifest.json;
   - styles.css.
+- [ ] Verify and install the `1.0.2` GitHub Release with `main.js`, `manifest.json`, `styles.css`, and the ZIP. Recover via manual Release workflow dispatch using tag `1.0.2`.
 - [ ] Install the GitHub release once manually/with BRAT as a public beta.
-- [ ] Obtain Sasoon's explicit written approval in upstream issue #33, or follow the applicable Obsidian abandoned-fork process.
-- [ ] Submit the public repository to the Obsidian Community Plugins directory.
+- [ ] Obtain Sasoon's explicit written approval in upstream issue #33, or follow the applicable Obsidian abandoned-fork process. Last upstream main commit: 2026-02-28; permission request: 2026-09-20 13:41 UTC; 30-day response window closes 2026-10-20 13:41 UTC. Submit from 2026-10-21 if no response/update and other eligibility conditions remain true.
+- [ ] Submit the public repository via https://community.obsidian.md after satisfying the fork policy (the previous obsidian-releases PR submission flow is retired). See [community submission status](community-submission.md).
 - [ ] Address any automated/manual Obsidian review feedback.
