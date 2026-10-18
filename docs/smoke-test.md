@@ -7,7 +7,7 @@ Run this checklist again before every public release when synchronization, OAuth
 ## 1. Clean build and installation
 
 - [x] Run `npm ci`.
-- [x] Run `npm audit` with zero known vulnerabilities.
+- [x] Run `npm audit --omit=dev` with no reported production vulnerabilities (known dev-only `obsidian` → `moment` advisory is tracked separately).
 - [x] Run `npm run build`.
 - [x] Install under `.obsidian/plugins/tasks-gcal-sync/`.
 - [x] Verify `main.js`, `manifest.json`, and `styles.css` load successfully.
@@ -165,9 +165,10 @@ After modernizing TypeScript/build configuration and removing legacy CSS/ID help
 A release candidate is ready for merge/tagging when:
 
 - [x] the full functional smoke test above passes;
-- [x] `npm audit` is clean;
+- [x] `npm audit --omit=dev` is clean;
 - [x] clean `npm ci && npm run build` succeeds locally;
 - [x] GitHub Build workflow is green on the release-preparation/final main commit;
 - [x] release version metadata is bumped consistently before tagging;
 - [x] the published `1.0.0` tag exactly matched `manifest.json.version` at release time.
 - [x] the published `1.0.1` tag exactly matched `manifest.json.version`; its release workflow completed successfully with the required assets.
+- [ ] the `1.0.2` tag is published with `main.js`, `manifest.json`, `styles.css`, and the ZIP after rerunning the Release workflow for the existing tag.
