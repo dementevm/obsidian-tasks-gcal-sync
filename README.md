@@ -403,9 +403,11 @@ Local build:
 
 ```bash
 npm ci
-npm audit
+npm audit --omit=dev
 npm run build
 ```
+
+The CI release gate audits production dependencies with `npm audit --omit=dev`. A full `npm audit` also checks development dependencies; the upstream Obsidian SDK currently pulls in a vulnerable `moment` version, but the `obsidian` module is externalized from the distributed plugin bundle. Review new development-dependency advisories separately rather than disabling the production audit.
 
 The release files are:
 
@@ -415,7 +417,7 @@ The release files are:
 
 GitHub Actions currently builds with Node.js 24 and runs the same clean install, audit, version consistency checks and production build on every push/PR. It also creates an installable ZIP artifact containing a `tasks-gcal-sync/` directory.
 
-A tag matching strict `x.y.z` Semantic Versioning triggers the release workflow. The workflow refuses to publish if the tag, `package.json`, `manifest.json`, and `versions.json` disagree. Release tags must not use a `v` prefix: use `1.0.0`, not `v1.0.0`.
+A tag matching strict `x.y.z` Semantic Versioning triggers the release workflow. To recover a failed release without moving an existing tag, open **Actions → Release → Run workflow** on the default branch and enter the existing tag (for example `1.0.2`). It checks out that tagged source and creates or updates the corresponding GitHub Release assets. The workflow refuses to publish if the tag, `package.json`, `manifest.json`, and `versions.json` disagree. Release tags must not use a `v` prefix: use `1.0.2`, not `v1.0.2`.
 
 The full release regression checklist is in [`docs/smoke-test.md`](docs/smoke-test.md), with repository/publication gates in [`docs/public-release-checklist.md`](docs/public-release-checklist.md).
 
@@ -445,4 +447,4 @@ Original project and original author:
 
 This repository contains substantial modifications made by Mikhail Dementev. The original author remains credited for the upstream work on which this derivative project is based.
 
-Publication in the official Obsidian Community directory is contingent on satisfying Obsidian's fork policy, including publicly verifiable permission from the original author.
+Publication in the official Obsidian Community directory is contingent on satisfying Obsidian's fork policy: publicly verifiable approval from the original author, or the documented unreachable/inactive-upstream process. The public [permission request](https://github.com/Sasoon/obsidian-gcal-sync/issues/33) was opened on 2026-09-20; the 30-day window ends on 2026-10-20. See [community submission status](docs/community-submission.md).
